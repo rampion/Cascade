@@ -6,10 +6,8 @@
 {-# LANGUAGE PolyKinds              #-}
 {-# LANGUAGE RankNTypes             #-}
 {-# LANGUAGE FlexibleInstances      #-}
-{-# LANGUAGE FlexibleContexts       #-}
-{-# LANGUAGE BangPatterns           #-}
-{-# LANGUAGE ConstraintKinds        #-}
-module CascadeC where
+{-# LANGUAGE UndecidableInstances   #-}
+module Cascade where
 import GHC.Prim         (Constraint)
 import Control.Arrow
 import Control.Category
@@ -58,14 +56,16 @@ data AllOf (m :: * -> *) (ts :: [*]) where
   None :: AllOf m '[]
   (:&) :: a -> m (AllOf m ts) -> AllOf m (a ': ts)
 type AllOf' = AllOf Identity
+infixr 5 :&
 
 (&:) :: a -> AllOf' ts -> AllOf' (a ': ts)
 a &: as = a :& return as
+infixr 5 &:
 
 instance Show (AllOf Identity '[]) where
   showsPrec _ None = showString "None"
 
-instance (Show a, Show (AllOf' as)) => Show (AllOf Identity (a ': as)) where
+instance (Show a, Show (AllOf Identity as)) => Show (AllOf Identity (a ': as)) where
   showsPrec p (a :& (Identity as)) = showParen (p > 10) $ showsPrec 5 a . showString " &: " . showsPrec 5 as
 
 -- comonadic sum
@@ -83,11 +83,7 @@ there = There
 instance Show (OneOf Identity '[]) where
   showsPrec _ _ = error "impossible value of type OneOf '[]"
 
-type family AllSatisfy (f :: a -> Constraint) (as :: [a]) :: Constraint where
-  AllSatisfy f '[] = ()
-  AllSatisfy f (a ': as) = (f a, AllSatisfy f as)
-
-instance (Show a, Show (OneOf' as)) => Show (OneOf Identity (a ': as)) where
+instance (Show a, Show (OneOf Identity as)) => Show (OneOf Identity (a ': as)) where
   showsPrec (-1) (Here (Identity a))  = showString "here $ " . showsPrec 0 a
   showsPrec (-1) (There as)           = showString "there." . showsPrec (-1) as
   showsPrec p (Here (Identity a))     = showParen (p > 10) $ showString "here " . showsPrec 11 a
@@ -117,6 +113,7 @@ instance AsFunction (Cokleisli w) where
   run c   = Identity . runCokleisli c
   -- wrap f  = Cokleisli $ runIdentity . f
 
+{-
 type family OneOfNonEmptyTails (w :: * -> *) (ts :: [*]) :: [*] where
   OneOfNonEmptyTails w '[] = '[]
   OneOfNonEmptyTails w (a ': as) = OneOf w (a ': as) ': OneOfNonEmptyTails w as
@@ -130,13 +127,70 @@ oneOf :: (Comonad w, Monad m, Traversable w, Applicative m) =>
           (w x -> m y) -> OneOf w (x ': y ': zs) -> m (OneOf w (y ': zs))
 oneOf _ (There oo) = return oo
 oneOf f (Here wx)  = liftM Here . sequenceA $ wx =>> f
+-}
+
+-- simple cases
+resume' :: CascadeW w ts -> Cascade (Map (OneOf w) (Init (Tails ts)))
+resume' Done = Done
+resume' (Cokleisli f :>>> fs) = undefined
+
+record' :: CascadeM m ts -> Cascade (Map (AllOf m) (Tail (Inits ts)))
+record' Done = Done
+record' (Kleisli f :>>> fs) = undefined
+
+recordr' :: Cascade ts -> Cascade (Map AllOf' (Tail (RInits ts)))
+recordr' Done = Done
+recordr' (f :>>> fs) = undefined
+-- recordr' (f :>>> fs) = (\as@(a :& _) -> undefined) :>>> recordr' fs
+
+{- 
+-- complex cases
+resume :: (AsFunction c, m ~ Dst c, w ~ Src c) => 
+            CascadeC c ts -> CascadeM m (Map (OneOf w) (Init (Tails ts)))
+record :: (AsFunction c, m ~ Dst c, w ~ Src c) => 
+            CascadeC c ts -> CascadeW w (Map (AllOf m) (Tail (Inits ts)))
+recordr :: (AsFunction c, m ~ Dst c, w ~ Src c) => 
+            CascadeC c ts -> CascadeW w (Map (AllOf m) (Tail (RInits ts)))
+-}
 
 {-
-record :: CascadeC c ts -> CascadeC c (Map (AllOf m) (Tail (Inits ts)))
-record = undefined
+type family AllOfNonEmptyInits (m :: * -> *) (ts :: [*]) :: [*] where
+  AllOfNonEmptyInits m '[]        = '[]
+  AllOfNonEmptyInits m (a ': as)  = AllOf m '[a] ': MapCons a (AllOfNonEmptyInits m as)
 
-recordr :: CascadeC c ts -> CascadeC c (Map AllOf' (Tail (RInits ts)))
-recordr = undefined
+type family MapCons (a :: *) (ts :: [*]) :: [*] where
+  MapCons a '[] = '[]
+  MapCons a (AllOf m ts ': ms) = AllOf m (a ': ts) ': MapCons a ts
+
+
+record :: (AsFunction c, w ~ Src c, m ~ Dst c) =>
+            CascadeC c ts -> CascadeW w (AllOfNonEmptyInits m ts)
+            -- CascadeC c ts -> CascadeW w (Map (AllOf m) (Tail (Inits ts)))
+record Done = Done
+-- record (f :>>> fs) = allOf (run f) =>=: record fs
+
+sequenceAllOf :: (Monad m, Comonad w, Applicative m, Traversable w) => 
+                  w (AllOf m ts) -> AllOf m (Map w ts)
+sequenceAllOf wao = case extract wao of
+    None      -> None
+    a :& mas  -> liftW headAO wao :& liftM sequenceAllOf (sequenceA $ liftW tailAO wao)
+  where headAO (a :& _) = a
+        tailAO (_ :& mas) = mas
+
+
+-}
+{-
+allOf :: (Init ts' ~ ts, Last (t ': ts) ~ x, Last (t ': ts') ~ y) => 
+        (w x -> m y) -> w (AllOf m (t ': ts)) -> AllOf m (t ': ts')
+allOf f wao
+
+  f :: 
+
+a :& mas = (a :&) $ do
+  as <- mas
+  case as of
+    (_ :& _) -> allOf f as
+    None -> undefined
 -}
 
 -- examples
@@ -188,13 +242,20 @@ type family Init (as :: [a]) :: [a] where
   Init '[a] = '[]
   Init (a ': as)  = a ': Init as
 
-type RInits as  = Reverse (Map Reverse (Tails as))
-type Inits as   = RInits (Reverse as)
+type family RInits (as :: [a]) :: [[a]] where
+  RInits '[] = '[ '[] ]
+  RInits (a ': as) = '[] ': Map (Snoc a) (RInits as)
 
-type family ReverseR (rs :: [a]) (as :: [a]) :: [a] where
-  ReverseR rs '[] = rs
-  -- ReverseR rs (a ': as) = ReverseR (a ': rs) as
-type Reverse = ReverseR '[]
+type family Inits (as :: [a]) :: [[a]] where
+  Inits '[] = '[ '[] ]
+  Inits (a ': as) = '[] ': Map (Cons a) (Inits as)
+
+type family Snoc (t :: a) (ts :: [a]) :: [a] where
+  Snoc a '[] = '[a]
+  Snoc a (b ': cs) = b ': Snoc a cs
+
+type family Cons (t :: a) (ts :: [a]) :: [a] where
+  Cons a as = a ': as
 
 type family Map (f :: a -> b) (as :: [a]) where
   Map f '[] = '[]
