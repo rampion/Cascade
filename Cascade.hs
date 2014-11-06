@@ -7,7 +7,10 @@
 {-# LANGUAGE RankNTypes             #-}
 {-# LANGUAGE FlexibleInstances      #-}
 {-# LANGUAGE FlexibleContexts       #-}
+{-# LANGUAGE BangPatterns           #-}
+{-# LANGUAGE ConstraintKinds        #-}
 module CascadeC where
+import GHC.Prim         (Constraint)
 import Control.Arrow
 import Control.Category
 import Control.Comonad
@@ -80,9 +83,15 @@ there = There
 instance Show (OneOf Identity '[]) where
   showsPrec _ _ = error "impossible value of type OneOf '[]"
 
+type family AllSatisfy (f :: a -> Constraint) (as :: [a]) :: Constraint where
+  AllSatisfy f '[] = ()
+  AllSatisfy f (a ': as) = (f a, AllSatisfy f as)
+
 instance (Show a, Show (OneOf' as)) => Show (OneOf Identity (a ': as)) where
-  showsPrec p (Here (Identity a)) = showParen (p > 10) $ showString "here " . showsPrec 11 a
-  showsPrec p (There as)          = showParen (p > 10) $ showString "there " . showsPrec 11 as
+  showsPrec (-1) (Here (Identity a))  = showString "here $ " . showsPrec 0 a
+  showsPrec (-1) (There as)           = showString "there." . showsPrec (-1) as
+  showsPrec p (Here (Identity a))     = showParen (p > 10) $ showString "here " . showsPrec 11 a
+  showsPrec p (There as)              = showParen (p > 10) $ showString "there." . showsPrec (-1) as
 
 class Functionish c where
   type Src c :: * -> *
