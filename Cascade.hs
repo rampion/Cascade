@@ -5,6 +5,8 @@
 {-# LANGUAGE GADTs                  #-}
 {-# LANGUAGE PolyKinds              #-}
 {-# LANGUAGE RankNTypes             #-}
+{-# LANGUAGE FlexibleInstances      #-}
+{-# LANGUAGE FlexibleContexts       #-}
 module CascadeC where
 import Control.Arrow
 import Control.Category
@@ -59,6 +61,19 @@ data OneOf (w :: * -> *) (ts :: [*]) where
   Here  :: w a -> OneOf w (a ': as)
   There :: OneOf w as -> OneOf w (a ': as)
 type OneOf' = OneOf Identity
+
+here :: a -> OneOf' (a ': as)
+here = Here . Identity
+
+there :: OneOf' as -> OneOf' (a ': as)
+there = There
+
+instance Show (OneOf Identity '[]) where
+  showsPrec _ _ = error "impossible value of type OneOf '[]"
+
+instance (Show a, Show (OneOf' as)) => Show (OneOf Identity (a ': as)) where
+  showsPrec p (Here (Identity a)) = showParen (p > 10) $ showString "here " . showsPrec 11 a
+  showsPrec p (There as)          = showParen (p > 10) $ showString "there " . showsPrec 11 as
 
 class Functionish c where
   type Src c :: * -> *
