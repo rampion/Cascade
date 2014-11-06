@@ -13,6 +13,8 @@ import Control.Monad.Identity
 import Data.Char (toUpper)
 import Prelude hiding (id, (.))
 import System.Environment (getEnv, setEnv, getProgName)
+import Data.Traversable
+import Control.Applicative
 
 -- reified categorical composition
 data CascadeC (c :: * -> * -> *) (ts :: [*]) where
@@ -82,18 +84,21 @@ instance Functionish (Cokleisli w) where
   run c   = Identity . runCokleisli c
   wrap f  = Cokleisli $ runIdentity . f
 
-{-
-oneOf f (Here wt)   = f wt
-oneOf f (There oo)  = oo
+type family OneOfNonEmptyTails (w :: * -> *) (ts :: [*]) :: [*] where
+  OneOfNonEmptyTails w '[] = '[]
+  OneOfNonEmptyTails w (a ': as) = OneOf w (a ': as) ': OneOfNonEmptyTails w as
 
-resume :: Functionish c => CascadeC c ts -> Cascade (Map (OneOf (Src c)) (Init (Tails ts)))
+resume :: (Functionish c, w ~ Src c, m ~ Dst c, Comonad w, Monad m, Traversable w, Applicative m) => 
+          CascadeC c ts -> CascadeM m (OneOfNonEmptyTails w ts)
 resume Done = Done
-oneOf :: (w t -> OneOf w ts) -> OneOf w (t ': ts) -> OneOf w ts
--- resume (f :>>> fs) = (oneOf $ fmap Here . run f) :>>> resume fs
-resume (f :>>> fs) = f' :>>> resume fs
-  where f' (Here wt) = fmap Here $ run f wt
-  where f' (Here wt) = fmap Here $ run f wt
+resume (f :>>> fs) = oneOf (run f) >=>: resume fs
 
+oneOf :: (Comonad w, Monad m, Traversable w, Applicative m) =>
+          (w x -> m y) -> OneOf w (x ': y ': zs) -> m (OneOf w (y ': zs))
+oneOf _ (There oo) = return oo
+oneOf f (Here wx)  = liftM Here . sequenceA $ wx =>> f
+
+{-
 record :: CascadeC c ts -> CascadeC c (Map (AllOf m) (Tail (Inits ts)))
 record = undefined
 
