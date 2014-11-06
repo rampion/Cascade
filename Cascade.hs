@@ -93,35 +93,35 @@ instance (Show a, Show (OneOf' as)) => Show (OneOf Identity (a ': as)) where
   showsPrec p (Here (Identity a))     = showParen (p > 10) $ showString "here " . showsPrec 11 a
   showsPrec p (There as)              = showParen (p > 10) $ showString "there." . showsPrec (-1) as
 
-class Functionish c where
+class AsFunction c where
   type Src c :: * -> *
   type Dst c :: * -> *
   run   :: c a b -> Src c a -> Dst c b
-  wrap  :: (Src c a -> Dst c b) -> c a b
+  -- wrap  :: (Src c a -> Dst c b) -> c a b
 
-instance Functionish (->) where
+instance AsFunction (->) where
   type Src (->) = Identity
   type Dst (->) = Identity
   run  c = fmap c
-  wrap f = runIdentity . f . Identity
+  -- wrap f = runIdentity . f . Identity
 
-instance Functionish (Kleisli m) where
+instance AsFunction (Kleisli m) where
   type Src (Kleisli m) = Identity
   type Dst (Kleisli m) = m
   run c   = runKleisli c . runIdentity
-  wrap f  = Kleisli $ f . Identity
+  -- wrap f  = Kleisli $ f . Identity
 
-instance Functionish (Cokleisli w) where
+instance AsFunction (Cokleisli w) where
   type Src (Cokleisli w) = w
   type Dst (Cokleisli w) = Identity
   run c   = Identity . runCokleisli c
-  wrap f  = Cokleisli $ runIdentity . f
+  -- wrap f  = Cokleisli $ runIdentity . f
 
 type family OneOfNonEmptyTails (w :: * -> *) (ts :: [*]) :: [*] where
   OneOfNonEmptyTails w '[] = '[]
   OneOfNonEmptyTails w (a ': as) = OneOf w (a ': as) ': OneOfNonEmptyTails w as
 
-resume :: (Functionish c, w ~ Src c, m ~ Dst c, Comonad w, Monad m, Traversable w, Applicative m) => 
+resume :: (AsFunction c, w ~ Src c, m ~ Dst c, Comonad w, Monad m, Traversable w, Applicative m) => 
           CascadeC c ts -> CascadeM m (OneOfNonEmptyTails w ts)
 resume Done = Done
 resume (f :>>> fs) = oneOf (run f) >=>: resume fs
