@@ -17,52 +17,160 @@ function composition?</blockquote>
 
 So let's try to come up with something that lets us do something **beyond** simple composition.
 
-> {-# LANGUAGE MultiParamTypeClasses #-}
-> {-# LANGUAGE ConstraintKinds #-}
-> {-# LANGUAGE DataKinds #-}
-> {-# LANGUAGE FlexibleContexts #-}
-> {-# LANGUAGE FlexibleInstances #-}
-> {-# LANGUAGE GADTs #-}
-> {-# LANGUAGE KindSignatures #-}
-> {-# LANGUAGE PolyKinds #-}
-> {-# LANGUAGE TypeFamilies #-}
-> {-# LANGUAGE TypeOperators #-}
+> {-# LANGUAGE ConstraintKinds        #-}
+> {-# LANGUAGE DataKinds              #-}
+> {-# LANGUAGE FlexibleContexts       #-}
+> {-# LANGUAGE FlexibleInstances      #-}
+> {-# LANGUAGE GADTs                  #-}
+> {-# LANGUAGE KindSignatures         #-}
+> {-# LANGUAGE MultiParamTypeClasses  #-}
+> {-# LANGUAGE PolyKinds              #-}
+> {-# LANGUAGE TypeFamilies           #-}
+> {-# LANGUAGE TypeOperators          #-}
 > module Cascade where
-> import Control.Monad ((>=>), liftM)
-> import Control.Comonad ((=>=), liftW, Comonad, extract)
+> import Control.Monad    ((>=>), liftM)
+> import Control.Comonad  ((=>=), liftW, Comonad, extract)
 > import Control.Category ((>>>))
-> import GHC.Prim (Constraint)
-> 
+> import GHC.Prim         (Constraint)
+
+What we need is a type that instead of just recording the initial and final types of 
+the cascade of functions, records the type of each intermediate value as well.
+
+We can do this by using a GADT parameterized by a type-level list:
+
 > data Cascade (cs :: [*]) where
 >   Done :: Cascade '[a]
 >   (:>>>) :: (a -> b) -> Cascade (b ': cs) -> Cascade (a ': b ': cs)
 > infixr 5 :>>>
-> 
+
+Note that we check that the output of the function we cons with a `Cascade`
+matches the input to the `Cascade`.
+
+To see how these work, we'll need some way to apply them:
+
+> -- convert a Cascade to a function
+> compose :: Cascade (a ': as) -> a -> Last (a ': as)
+> compose Done = id
+> compose (f :>>> fc) = f >>> compose fc
+>
+> (~$~) = compose
+>
+> -- type level version of last :: [a] -> a
+> type family Last (as :: [a]) where
+>   Last '[a] = a
+>   Last (a ': as) = Last as
+
+So now we can construct cascades of functions:
+
+> fc, gc :: Cascade '[ String, Int, Float ]
+> fc = read :>>> fromIntegral :>>> Done
+> gc = length :>>> (2^) :>>> Done
+
+And apply them:
+
+    λ fc ~$~ "10"
+    10.0
+    λ gc ~$~ "10"
+    4.0
+
+But that's no more than we can do with function composition. What else can we do?
+
+How about blending two cascades?
+
+> -- alternate using functions from one cascade then the other
+> zigzag :: Cascade as -> Cascade as -> Cascade as
+> zigzag Done Done = Done
+> zigzag (f :>>> fc) (_ :>>> gc) = f :>>> zigzag gc fc
+
+    λ zigzag fc gc ~$~ "10"
+    1024.0
+    λ zigzag gc fc ~$~ "10"
+    2.0
+
+Or replacing one part of a cascade with a different function of the same type?
+
 > data Ripple (cs :: [*]) where
 >   Apply :: (a -> b) -> Ripple (a ': b ': cs)
 >   Skip :: Ripple cs -> Ripple (a ': cs)
 > 
-> -- you can change part of a cascade
 > replaceWith :: Ripple cs -> Cascade cs -> Cascade cs
-> replaceWith (Apply f) (_ :>>> fs) = f :>>> fs
-> replaceWith (Skip r) (f :>>> fs) = f :>>> replaceWith r fs
-> 
-> -- generalizing Either to a union of multiple types
-> data OneOf (cs :: [*]) where
->   Here :: a -> OneOf (a ': as)
->   There :: OneOf as -> OneOf (a ': as)
-> 
-> fromHere :: OneOf (a ': as) -> a
-> fromHere (Here a) = a
-> 
-> fromThere :: OneOf (a ': as) -> OneOf as
-> fromThere (There o) = o
-> 
+> replaceWith (Apply f) (_ :>>> fc) = f :>>> fc
+> replaceWith (Skip r) (f :>>> fc) = f :>>> replaceWith r fc
+>
+> zr :: Ripple (a ': b ': Float ': cs)
+> zr = Skip . Apply $ const 0.0
+
+    λ replaceWith zr fc ~$~ "10"
+    0.0
+    λ replaceWith zr gc ~$~ "10"
+    0.0
+
+More usefully, we can also use a cascade to see all the intermediate results :
+
 > -- generalizing (,) to a product of multiple types
 > data AllOf (cs :: [*]) where
 >   None :: AllOf '[]
 >   (:&) :: a -> AllOf as -> AllOf (a ': as)
 > infixr 5 :&
+>
+> instance Show (AllOf '[]) where
+>   showsPrec _ None = showString "None"
+> 
+> instance (Show a, Show (AllOf as)) => Show (AllOf (a ': as)) where
+>   showsPrec p (a :& as) = showParen (p > 10) $ showsPrec 5 a . showString " :& " . showsPrec 5 as
+> 
+> -- end the cascade at all of its exit points
+> toAllOf :: Cascade (a ': as) -> a -> AllOf (a ': as)
+> toAllOf Done a        = a :& None
+> toAllOf (f :>>> fc) a = a :& (f >>> toAllOf fc) a
+>
+> (*$~) = toAllOf
+
+    λ fc *$~ "10"
+    "10" :& 10 :& 10.0 :& None
+    λ gc *$~ "10"
+    "10" :& 2 :& 4.0 :& None
+
+Or to resume a computation from any point:
+
+> -- generalizing Either to a union of multiple types
+> data OneOf (cs :: [*]) where
+>   Here :: a -> OneOf (a ': as)
+>   There :: OneOf as -> OneOf (a ': as)
+> 
+> instance Show (OneOf '[]) where
+>   showsPrec _ _ = error "impossible value of type OneOf '[]"
+> 
+> instance (Show a, Show (OneOf as)) => Show (OneOf (a ': as)) where
+>   showsPrec p (Here a)    = showParen (p > 10) $ showString "Here " . showsPrec 11 a
+>   showsPrec p (There as)  = showParen (p > 10) $ showString "There " . showsPrec 11 as
+> 
+> -- start the cascade at any of its entry points
+> fromOneOf :: Cascade cs -> OneOf cs -> Last cs
+> fromOneOf fc (Here a) = compose fc a
+> fromOneOf (_ :>>> fc) (There o) = fromOneOf fc o
+>
+> (~$?) = fromOneOf
+
+    λ fc ~$? Here "70"
+    70.0
+    λ gc ~$? There (Here 5)
+    32.0
+
+Or both:
+
+> -- start anywhere, and end everywhere after that
+> fromOneOfToAllOf :: Cascade cs -> OneOf cs -> OneOf (Map AllOf (Tails cs))
+> fromOneOfToAllOf fc (Here a) = Here $ toAllOf fc a
+> fromOneOfToAllOf (_ :>>> fc) (There o) = There $ fromOneOfToAllOf fc o
+>
+> (*$?) = fromOneOfToAllOf
+
+    λ fc *$? There (Here 70)
+    There (Here (70 :& 70.0 :& None))
+    λ gc *$? Here "six"
+    Here ("six" :& 3 :& 8.0 :& None)
+
 > 
 > type family AllOf' (cs ::[*]) where
 >   AllOf' '[] = ()
@@ -71,35 +179,6 @@ So let's try to come up with something that lets us do something **beyond** simp
 > to :: AllOf cs -> AllOf' cs
 > to None = ()
 > to (a :& as) = (a, to as)
-> 
-> -- a small example
-> fs :: Cascade '[ String, Int, Float ]
-> fs = read :>>> fromIntegral :>>> Done
-> 
-> -- alternate using functions from one chain then the other
-> zigzag :: Cascade as -> Cascade as -> Cascade as
-> zigzag Done Done = Done
-> zigzag (f :>>> fs) (_ :>>> gs) = f :>>> zigzag gs fs
-> 
-> -- compose a chain into a single function
-> compose :: Cascade (a ': as) -> a -> Last (a ': as)
-> compose Done = id
-> compose (f :>>> fs) = f >>> compose fs
-> 
-> -- start the cascade at any of its entry points
-> fromOneOf :: Cascade cs -> OneOf cs -> Last cs
-> fromOneOf fs (Here a) = compose fs a
-> fromOneOf (_ :>>> fs) (There o) = fromOneOf fs o
-> 
-> -- end the cascade at all of its exit points
-> toAllOf :: Cascade (a ': as) -> a -> AllOf (a ': as)
-> toAllOf Done a        = a :& None
-> toAllOf (f :>>> fs) a = a :& (f >>> toAllOf fs) a
-> 
-> -- start anywhere, and end everywhere after that
-> fromOneOfToAllOf :: Cascade cs -> OneOf cs -> OneOf (Map AllOf (Tails cs))
-> fromOneOfToAllOf fs (Here a) = Here $ toAllOf fs a
-> fromOneOfToAllOf (_ :>>> fs) (There o) = There $ fromOneOfToAllOf fs o
 > 
 > -- and you can do Monads too!
 > data CascadeM (m :: * -> *) (cs :: [*]) where
@@ -112,21 +191,21 @@ So let's try to come up with something that lets us do something **beyond** simp
 > 
 > composeM :: Monad m => CascadeM m (a ': as) -> a -> m (Last (a ': as))
 > composeM DoneM = return
-> composeM (f :>=> fs) = f >=> composeM fs
+> composeM (f :>=> fc) = f >=> composeM fc
 > 
 > fromOneOfM :: Monad m => CascadeM m cs -> OneOf cs -> m (Last cs)
-> fromOneOfM fs (Here a) = composeM fs a
-> fromOneOfM (_ :>=> fs) (There o) = fromOneOfM fs o
+> fromOneOfM fc (Here a) = composeM fc a
+> fromOneOfM (_ :>=> fc) (There o) = fromOneOfM fc o
 > 
 > -- end the cascade at all of its exit points
 > toAllOfM :: Monad m => CascadeM m (a ': as) -> a -> m (AllOf (a ': as))
 > toAllOfM DoneM a       = return $ a :& None
-> toAllOfM (f :>=> fs) a = (a :&) `liftM` (f >=> toAllOfM fs) a
+> toAllOfM (f :>=> fc) a = (a :&) `liftM` (f >=> toAllOfM fc) a
 > 
 > -- start anywhere, and end everywhere after that
 > fromOneOfToAllOfM :: Monad m => CascadeM m cs -> OneOf cs -> m (OneOf (Map AllOf (Tails cs)))
-> fromOneOfToAllOfM fs (Here a) = Here `liftM` toAllOfM fs a
-> fromOneOfToAllOfM (_ :>=> fs) (There o) = There `liftM` fromOneOfToAllOfM fs o
+> fromOneOfToAllOfM fc (Here a) = Here `liftM` toAllOfM fc a
+> fromOneOfToAllOfM (_ :>=> fc) (There o) = There `liftM` fromOneOfToAllOfM fc o
 > 
 > -- and Comonads!
 > data CascadeW (w :: * -> *) (cs :: [*]) where
@@ -136,32 +215,34 @@ So let's try to come up with something that lets us do something **beyond** simp
 > 
 > composeW :: Comonad w => CascadeW w (a ': as) -> w a -> Last (a ': as)
 > composeW DoneW = extract
-> composeW (f :=>= fs) = f =>= composeW fs
+> composeW (f :=>= fc) = f =>= composeW fc
+> 
+> fromHere :: OneOf (a ': as) -> a
+> fromHere (Here a) = a
+> 
+> fromThere :: OneOf (a ': as) -> OneOf as
+> fromThere (There o) = o
 > 
 > fromOneOfW :: Comonad w => CascadeW w cs -> w (OneOf cs) -> Last cs
-> fromOneOfW fs w = case extract w of
->   Here _  -> composeW fs $ liftW fromHere w
->   There _ -> case fs of _ :=>= gs -> fromOneOfW gs $ liftW fromThere w
+> fromOneOfW fc w = case extract w of
+>   Here _  -> composeW fc $ liftW fromHere w
+>   There _ -> case fc of _ :=>= gc -> fromOneOfW gc $ liftW fromThere w
 > 
 > -- end the cascade at all of its exit points
 > toAllOfW :: Comonad w => CascadeW w (a ': as) -> w a -> AllOf (a ': as)
 > toAllOfW DoneW w       = extract w :& None
-> toAllOfW (f :=>= fs) w = extract w :& (f =>= toAllOfW fs) w
+> toAllOfW (f :=>= fc) w = extract w :& (f =>= toAllOfW fc) w
 > 
 > -- start anywhere, and end everywhere after that
 > fromOneOfToAllOfW :: Comonad w => CascadeW w cs -> w (OneOf cs) -> OneOf (Map AllOf (Tails cs))
-> fromOneOfToAllOfW fs w = case extract w of
->   Here _  -> Here . toAllOfW fs $ liftW fromHere w
->   There _ -> case fs of _ :=>= gs -> There . fromOneOfToAllOfW gs $ liftW fromThere w
+> fromOneOfToAllOfW fc w = case extract w of
+>   Here _  -> Here . toAllOfW fc $ liftW fromHere w
+>   There _ -> case fc of _ :=>= gc -> There . fromOneOfToAllOfW gc $ liftW fromThere w
 > 
 > -- type level list functions
 > type family Map (f :: a -> b) (as :: [a]) where
 >   Map f '[] = '[]
 >   Map f (a ': as) = f a ': Map f as
-> 
-> type family Last (as :: [a]) where
->   Last '[a] = a
->   Last (a ': as) = Last as
 > 
 > type family Tails (as :: [a]) where
 >   Tails '[] = '[ '[] ]
@@ -201,27 +282,21 @@ So let's try to come up with something that lets us do something **beyond** simp
 >   show None = "None"
 > -}
 > 
-> instance Show (AllOf '[]) where
->   show None = "None"
-> 
-> instance (Show a, Show (AllOf as)) => Show (AllOf (a ': as)) where
->   show (a :& as) = show a ++ " :& " ++ show as
-> 
 >   
 > {-
 > type Cascade' as = AllOf (ZipWith (->) (Init as) (Tail as))
 > 
 > to :: Cascade as -> Cascade' as
 > to Done = None
-> to (f :>>> fs) = f :& to fs
+> to (f :>>> fc) = f :& to fc
 > 
 > fro :: Cascade' as -> Cascade as
 > fro None = Done
-> fro (f :& fs) = f :>>> fro fs
+> fro (f :& fc) = f :>>> fro fc
 > 
-> -- compose a chain into a single function
+> -- compose a cascade into a single function
 > compose' :: Cascade' (a ': as) -> a -> Last (a ': as)
 > compose' None = id
-> --compose' (f :& fs) = f >>> compose' fs
+> --compose' (f :& fc) = f >>> compose' fc
 > -}
 > -- au BufWritePost *.lhs !pandoc % > %:r.html ; ghc -c %
