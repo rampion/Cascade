@@ -7,6 +7,7 @@
 {-# LANGUAGE RankNTypes             #-}
 {-# LANGUAGE FlexibleInstances      #-}
 {-# LANGUAGE UndecidableInstances   #-}
+{-# LANGUAGE ConstraintKinds        #-}
 module Cascade where
 import GHC.Prim         (Constraint)
 import Control.Arrow
@@ -138,9 +139,22 @@ record' :: CascadeM m ts -> Cascade (Map (AllOf m) (Tail (Inits ts)))
 record' Done = Done
 record' (Kleisli f :>>> fs) = undefined
 
-recordr' :: Cascade ts -> Cascade (Map AllOf' (Tail (RInits ts)))
+{-
+Cascade '[a]      -> Cascade '[ AllOf' '[a] ]
+Cascade '[a,b]    -> Cascade '[ AllOf' '[a], AllOf' '[b,a] ]
+Cascade '[a,b,c]  -> Cascade '[ AllOf' '[a], AllOf' '[b,a], AllOf' '[c,b,a] ]
+-}
+type family StartsWith (ts :: [*]) (ts' :: [*])  :: Constraint where
+  StartsWith '[] ts' = ()
+  StartsWith (t ': ts) (t' ': ts') = (t ~ t', StartsWith ts ts')
+
+-- I think the problem is that the recursive case doesn't mention the original
+-- type, so it can't contain it in its tail
+recordr' :: StartsWith ts ts' => Cascade ts -> Cascade (Map AllOf' (Tail (RInits ts')))
 recordr' Done = Done
-recordr' (f :>>> fs) = undefined
+recordr' (f :>>> fs) = go f :>>> recordr' fs
+  where go :: (y -> x) -> AllOf' (y ': zs) -> AllOf' (x ': y ': zs)
+        go = undefined
 -- recordr' (f :>>> fs) = (\as@(a :& _) -> undefined) :>>> recordr' fs
 
 {- 
