@@ -56,6 +56,15 @@ data AllOf (m :: * -> *) (ts :: [*]) where
   (:&) :: a -> m (AllOf m ts) -> AllOf m (a ': ts)
 type AllOf' = AllOf Identity
 
+(&:) :: a -> AllOf' ts -> AllOf' (a ': ts)
+a &: as = a :& return as
+
+instance Show (AllOf Identity '[]) where
+  showsPrec _ None = showString "None"
+
+instance (Show a, Show (AllOf' as)) => Show (AllOf Identity (a ': as)) where
+  showsPrec p (a :& (Identity as)) = showParen (p > 10) $ showsPrec 5 a . showString " &: " . showsPrec 5 as
+
 -- comonadic sum
 data OneOf (w :: * -> *) (ts :: [*]) where
   Here  :: w a -> OneOf w (a ': as)
