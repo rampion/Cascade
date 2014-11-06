@@ -5,7 +5,8 @@
 {-# LANGUAGE GADTs                  #-}
 {-# LANGUAGE PolyKinds              #-}
 {-# LANGUAGE RankNTypes             #-}
-module Cascade where
+module CascadeC where
+import Control.Arrow
 import Control.Category
 import Control.Comonad
 import Control.Monad.Identity
@@ -13,77 +14,101 @@ import Data.Char (toUpper)
 import Prelude hiding (id, (.))
 import System.Environment (getEnv, setEnv, getProgName)
 
--- generalized chain of invocations
-data Cascade (w :: * -> *) (m :: * -> *) (ts :: [*]) where
-  (:>>>)  :: (w a -> m b) -> Cascade w m (b ': ts) -> Cascade w m (a ': b ': ts)
-  Done    :: Cascade w m '[t]
+-- reified categorical composition
+data CascadeC (c :: * -> * -> *) (ts :: [*]) where
+  (:>>>)  :: c x y -> CascadeC c (y ': zs) -> CascadeC c (x ': y ': zs)
+  Done    :: CascadeC c '[t]
 infixr 1 :>>>
 
 -- compress into a function
-cascade :: forall w m a b ts.
-            (forall x y z. (w x -> m y) -> (w y -> m z) -> w x -> m z) ->
-            Cascade w m (a ': b ': ts) -> w a -> m (Last (b ': ts))
-cascade (>>>) (f :>>> fs) = case fs of
-  Done      -> f
-  _ :>>> _  -> f >>> cascade (>>>) fs
-
+cascade :: Category c => CascadeC c (t ': ts) -> c t (Last (t ': ts))
+cascade Done = id
+cascade (f :>>> fs) = f >>> cascade fs
 
 -- specialize to functions
-type Cascade'   = Cascade Identity Identity
-(>>>:) :: (a -> b) -> Cascade' (b ': ts) -> Cascade' (a ': b ': ts)
-(>>>:) f c = fmap f :>>> c
-infixr 1 >>>:
-
-cascade' :: Cascade' (a ': b ': ts) -> a -> Last (a ': b ': ts)
-cascade' fs = runIdentity . cascade (>>>) fs . Identity
+type Cascade   = CascadeC (->)
 
 -- specialize to monads
-type CascadeM m = Cascade Identity m
-(>=>:) :: (a -> m b) -> CascadeM m (b ': ts) -> CascadeM m (a ': b ': ts)
-(>=>:) f c = (f . runIdentity) :>>> c
+type CascadeM m = CascadeC (Kleisli m)
+(>=>:) :: (x -> m y) -> CascadeM m (y ': zs) -> CascadeM m (x ': y ': zs)
+(>=>:) f cm = Kleisli f :>>> cm
 infixr 1 >=>:
 
-cascadeM :: Monad m => CascadeM m (a ': b ': ts) -> a -> m (Last (a ': b ': ts))
-cascadeM fs = cascade (\f g -> f >=> g . Identity) fs . Identity
+cascadeM :: Monad m => CascadeM m (t ': ts) -> t -> m (Last (t ': ts))
+cascadeM = runKleisli . cascade
 
 -- specialize to comonads
-type CascadeW w = Cascade w Identity
-(=>=:) :: (w a -> b) -> CascadeW w (b ': ts) -> CascadeW w (a ': b ': ts)
-(=>=:) f c = (Identity . f) :>>> c
+type CascadeW w = CascadeC (Cokleisli w)
+(=>=:) :: (w x -> y) -> CascadeW w (y ': zs) -> CascadeW w (x ': y ': zs)
+(=>=:) f cw = Cokleisli f :>>> cw
 infixr 1 =>=:
 
-cascadeW :: Comonad w => CascadeW w (a ': b ': ts) -> w a -> Last (a ': b ': ts)
-cascadeW fs = runIdentity . cascade (\f g -> runIdentity . f =>= g) fs
+cascadeW :: Comonad w => CascadeW w (t ': ts) -> w t -> Last (t ': ts)
+cascadeW = runCokleisli . cascade
 
--- generalized sum
+-- monadic product
 data AllOf (m :: * -> *) (ts :: [*]) where
   None :: AllOf m '[]
   (:&) :: a -> m (AllOf m ts) -> AllOf m (a ': ts)
 type AllOf' = AllOf Identity
 
--- generalized product
+-- comonadic sum
 data OneOf (w :: * -> *) (ts :: [*]) where
-  Goose :: w a -> OneOf w (a ': as)
-  Duck  :: OneOf w as -> OneOf w (a ': as)
+  Here  :: w a -> OneOf w (a ': as)
+  There :: OneOf w as -> OneOf w (a ': as)
 type OneOf' = OneOf Identity
 
-resume :: Cascade w m ts -> Cascade w m (Map (OneOf w) (Init (Tails ts)))
-resume = undefined
+class Functionish c where
+  type Src c :: * -> *
+  type Dst c :: * -> *
+  run   :: c a b -> Src c a -> Dst c b
+  wrap  :: (Src c a -> Dst c b) -> c a b
 
-record :: Cascade w m ts -> Cascade w m (Map (AllOf m) (Tail (Inits ts)))
+instance Functionish (->) where
+  type Src (->) = Identity
+  type Dst (->) = Identity
+  run  c = fmap c
+  wrap f = runIdentity . f . Identity
+
+instance Functionish (Kleisli m) where
+  type Src (Kleisli m) = Identity
+  type Dst (Kleisli m) = m
+  run c   = runKleisli c . runIdentity
+  wrap f  = Kleisli $ f . Identity
+
+instance Functionish (Cokleisli w) where
+  type Src (Cokleisli w) = w
+  type Dst (Cokleisli w) = Identity
+  run c   = Identity . runCokleisli c
+  wrap f  = Cokleisli $ runIdentity . f
+
+{-
+oneOf f (Here wt)   = f wt
+oneOf f (There oo)  = oo
+
+resume :: Functionish c => CascadeC c ts -> Cascade (Map (OneOf (Src c)) (Init (Tails ts)))
+resume Done = Done
+oneOf :: (w t -> OneOf w ts) -> OneOf w (t ': ts) -> OneOf w ts
+-- resume (f :>>> fs) = (oneOf $ fmap Here . run f) :>>> resume fs
+resume (f :>>> fs) = f' :>>> resume fs
+  where f' (Here wt) = fmap Here $ run f wt
+  where f' (Here wt) = fmap Here $ run f wt
+
+record :: CascadeC c ts -> CascadeC c (Map (AllOf m) (Tail (Inits ts)))
 record = undefined
 
-recordr :: Cascade w m ts -> Cascade w m (Map AllOf' (Tail (RInits ts)))
+recordr :: CascadeC c ts -> CascadeC c (Map AllOf' (Tail (RInits ts)))
 recordr = undefined
+-}
 
 -- examples
-fc, gc :: Cascade' '[String, Int, Double, Double]
-fc =  read          >>>:
-      fromIntegral  >>>:
-      (1/)          >>>: Done
-gc =  length        >>>:
-      (2^)          >>>:
-      negate        >>>: Done
+fc, gc :: Cascade '[String, Int, Double, Double]
+fc =  read          :>>>
+      fromIntegral  :>>>
+      (1/)          :>>> Done
+gc =  length        :>>>
+      (2^)          :>>>
+      negate        :>>> Done
 
 mc, nc :: CascadeM IO '[ String, (), String, String, () ]
 mc =  putStrLn                >=>:
@@ -104,7 +129,7 @@ vc =  toEnum . snd              =>=:
       show                      =>=: Done
 
 -- alternate using functions from one cascade then the other
-zigzag :: Cascade w m ts -> Cascade w m ts -> Cascade w m ts
+zigzag :: CascadeC c ts -> CascadeC c ts -> CascadeC c ts
 zigzag Done Done = Done
 zigzag (f :>>> fc) (_ :>>> gc) = f :>>> zigzag gc fc
 
@@ -124,18 +149,14 @@ type family Last (ts :: [a]) :: a where
 type family Init (as :: [a]) :: [a] where
   Init '[a] = '[]
   Init (a ': as)  = a ': Init as
-type family Inits (as :: [a]) :: [[a]] where
-  Inits '[] = '[ '[] ]
-  Inits (a ': as)  = '[] ': MapCons a (Inits as)
 
-type family RInits_r (xss :: [[a]]) (xs :: [a]) :: [[a]] where
-  RInits_r xss '[] = xss
-  RInits_r xss (a ': as) = RInits_r (MapCons a xss) as
-type RInits = RInits_r '[ '[] ]
+type RInits as  = Reverse (Map Reverse (Tails as))
+type Inits as   = RInits (Reverse as)
 
-type family MapCons (x :: a) (xss :: [[a]]) :: [[a]] where
-  MapCons x '[] = '[]
-  MapCons x (xs ': xss) = (x ': xs) ': MapCons x xss
+type family ReverseR (rs :: [a]) (as :: [a]) :: [a] where
+  ReverseR rs '[] = rs
+  -- ReverseR rs (a ': as) = ReverseR (a ': rs) as
+type Reverse = ReverseR '[]
 
 type family Map (f :: a -> b) (as :: [a]) where
   Map f '[] = '[]
