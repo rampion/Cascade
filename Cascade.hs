@@ -26,6 +26,10 @@ data CascadeC (c :: * -> * -> *) (ts :: [*]) where
   Done    :: CascadeC c '[t]
 infixr 1 :>>>
 
+type family Last (ts :: [a]) :: a where
+  Last '[a] = a
+  Last (a ': as) = Last as
+
 -- compress into a function
 cascade :: Category c => CascadeC c (t ': ts) -> c t (Last (t ': ts))
 cascade Done = id
@@ -53,168 +57,79 @@ cascadeW :: Comonad w => CascadeW w (t ': ts) -> w t -> Last (t ': ts)
 cascadeW = runCokleisli . cascade
 
 -- monadic product
-data AllOf (m :: * -> *) (ts :: [*]) where
-  None :: AllOf m '[]
-  (:&) :: a -> m (AllOf m ts) -> AllOf m (a ': ts)
-type AllOf' = AllOf Identity
+data ProductM (m :: * -> *) (ts :: [*]) where
+  None :: ProductM m '[]
+  (:&) :: a -> m (ProductM m ts) -> ProductM m (a ': ts)
+type Product = ProductM Identity
 infixr 5 :&
 
-(&:) :: a -> AllOf' ts -> AllOf' (a ': ts)
+(&:) :: a -> Product ts -> Product (a ': ts)
 a &: as = a :& return as
 infixr 5 &:
 
-instance Show (AllOf Identity '[]) where
+instance Show (ProductM Identity '[]) where
   showsPrec _ None = showString "None"
 
-instance (Show a, Show (AllOf Identity as)) => Show (AllOf Identity (a ': as)) where
+instance (Show a, Show (ProductM Identity as)) => Show (ProductM Identity (a ': as)) where
   showsPrec p (a :& (Identity as)) = showParen (p > 10) $ showsPrec 5 a . showString " &: " . showsPrec 5 as
 
 -- comonadic sum
-data OneOf (w :: * -> *) (ts :: [*]) where
-  Here  :: w a -> OneOf w (a ': as)
-  There :: OneOf w as -> OneOf w (a ': as)
-type OneOf' = OneOf Identity
+data SumW (w :: * -> *) (ts :: [*]) where
+  Here  :: w a -> SumW w (a ': as)
+  There :: SumW w as -> SumW w (a ': as)
+type Sum = SumW Identity
 
-here :: a -> OneOf' (a ': as)
+here :: a -> Sum (a ': as)
 here = Here . Identity
 
-there :: OneOf' as -> OneOf' (a ': as)
+there :: Sum as -> Sum (a ': as)
 there = There
 
-instance Show (OneOf Identity '[]) where
-  showsPrec _ _ = error "impossible value of type OneOf '[]"
+instance Show (SumW Identity '[]) where
+  showsPrec _ _ = error "impossible value of type Sum '[]"
 
-instance (Show a, Show (OneOf Identity as)) => Show (OneOf Identity (a ': as)) where
+instance (Show a, Show (SumW Identity as)) => Show (SumW Identity (a ': as)) where
   showsPrec (-1) (Here (Identity a))  = showString "here $ " . showsPrec 0 a
   showsPrec (-1) (There as)           = showString "there." . showsPrec (-1) as
   showsPrec p (Here (Identity a))     = showParen (p > 10) $ showString "here " . showsPrec 11 a
   showsPrec p (There as)              = showParen (p > 10) $ showString "there." . showsPrec (-1) as
 
-class Functionish c where
-  type Src c :: * -> *
-  type Dst c :: * -> *
-  run   :: c a b -> Src c a -> Dst c b
+type family TailSumsW (w :: * -> *) (ts :: [*]) :: [*] where
+  TailSumsW w '[] = '[]
+  TailSumsW w (a ': as) = SumW w (a ': as) ': TailSumsW w as
+type TailSums ts = TailSumsW Identity ts
 
-instance Functionish (->) where
-  type Src (->) = Identity
-  type Dst (->) = Identity
-  run  c = fmap c
+resumeC :: (Comonad w, Monad m) => 
+            (forall x. w (m x) -> m (w x)) -> 
+            (forall a b. c a b -> w a -> m b) -> 
+            CascadeC c ts -> CascadeM m (TailSumsW w ts)
+resumeC _ _ Done = Done
+resumeC swap run (f :>>> fs) = pops swap (run f) >=>: resumeC swap run fs
 
-instance Functionish (Kleisli m) where
-  type Src (Kleisli m) = Identity
-  type Dst (Kleisli m) = m
-  run c   = runKleisli c . runIdentity
+resumeM :: Monad m => CascadeM m ts -> CascadeM m (TailSums ts)
+resumeM = resumeC (liftM Identity . runIdentity) (\c -> runKleisli c . runIdentity)
 
-instance Functionish (Cokleisli w) where
-  type Src (Cokleisli w) = w
-  type Dst (Cokleisli w) = Identity
-  run c   = Identity . runCokleisli c
+resumeW :: Comonad w => CascadeW w ts -> Cascade (TailSumsW w ts)
+resumeW = unwrapM . resumeC (Identity . liftW runIdentity) (\c -> Identity . runCokleisli c)
 
-{-
-type family OneOfNonEmptyTails (w :: * -> *) (ts :: [*]) :: [*] where
-  OneOfNonEmptyTails w '[] = '[]
-  OneOfNonEmptyTails w (a ': as) = OneOf w (a ': as) ': OneOfNonEmptyTails w as
+resume :: Cascade ts -> Cascade (TailSums ts)
+resume = unwrapM . resumeC id fmap
 
-resume :: (Functionish c, w ~ Src c, m ~ Dst c, Comonad w, Monad m, Traversable w, Applicative m) =>
-          CascadeC c ts -> CascadeM m (OneOfNonEmptyTails w ts)
-resume Done = Done
-resume (f :>>> fs) = oneOf (run f) >=>: resume fs
+transform :: (forall a b. c a b -> c' a b) -> CascadeC c ts -> CascadeC c' ts
+transform _ Done = Done
+transform g (f :>>> fs) = g f :>>> transform g fs
 
-oneOf :: (Comonad w, Monad m, Traversable w, Applicative m) =>
-          (w x -> m y) -> OneOf w (x ': y ': zs) -> m (OneOf w (y ': zs))
-oneOf _ (There oo) = return oo
-oneOf f (Here wx)  = liftM Here . sequenceA $ wx =>> f
--}
+unwrapM :: CascadeC (Kleisli Identity) ts -> Cascade ts
+unwrapM = transform $ \f -> runIdentity . runKleisli f
 
--- simple cases
-resume' :: CascadeW w ts -> Cascade (Map (OneOf w) (Init (Tails ts)))
-resume' Done = Done
-resume' (Cokleisli f :>>> fs) = undefined
+pops :: (Comonad w, Monad m) =>
+          (forall t. w (m t) -> m (w t)) -> (w x -> m y) -> 
+          SumW w (x ': y ': zs) -> m (SumW w (y ': zs))
+pops _ _ (There oo) = return oo
+pops swap f (Here wx)  = liftM Here . swap $ wx =>> f
 
-record' :: CascadeM m ts -> Cascade (Map (AllOf m) (Tail (Inits ts)))
-record' Done = Done
-record' (Kleisli f :>>> fs) = undefined
-
-{-
-Cascade '[a]      -> Cascade '[ AllOf' '[a] ]
-Cascade '[a,b]    -> Cascade '[ AllOf' '[a], AllOf' '[b,a] ]
-Cascade '[a,b,c]  -> Cascade '[ AllOf' '[a], AllOf' '[b,a], AllOf' '[c,b,a] ]
-type family StartsWith (ts :: [*]) (ts' :: [*])  :: Constraint where
-  StartsWith '[] ts' = ()
-  StartsWith (t ': ts) (t' ': ts') = (t ~ t', StartsWith ts ts')
-
--- I think the problem is that the recursive case doesn't mention the original
--- type, so it can't contain it in its tail
-recordr' :: StartsWith ts ts' => Cascade ts -> Cascade (Map AllOf' (Tail (RInits ts')))
-recordr' Done = Done
-recordr' (f :>>> fs) = go f :>>> recordr' fs
-  where go :: (y -> x) -> AllOf' (y ': zs) -> AllOf' (x ': y ': zs)
-        go = undefined
--- recordr' (f :>>> fs) = (\as@(a :& _) -> undefined) :>>> recordr' fs
--}
-
-recordr' :: forall t ts. Cascade (t ': ts) -> (forall ts'. Cascade (AllOfRConcats ts (t ': ts')))
-recordr' Done = Done
-recordr' (f :>>> fs) = pushes f :>>> recordr' fs
-
-pushes :: (y -> x) -> AllOf' (y ': zs) -> AllOf' (x ': y ': zs)
+pushes :: (y -> x) -> Product (y ': zs) -> Product (x ': y ': zs)
 pushes f yzs@(y :& _) = f y &: yzs
-
-type family AllOfRConcats (xs :: [a]) (ys :: [a]) :: [*] where
-  AllOfRConcats '[] ys = '[ AllOf' ys]
-  AllOfRConcats (a ': as) ys = AllOf' ys ': AllOfRConcats as (a ': ys)
-
-{-
-recordr' Done = Done
-recordr' (f :>>> fs) = pushes f :>>> recordr' fs
--- complex cases
-resume :: (Functionish c, m ~ Dst c, w ~ Src c) =>
-            CascadeC c ts -> CascadeM m (Map (OneOf w) (Init (Tails ts)))
-record :: (Functionish c, m ~ Dst c, w ~ Src c) =>
-            CascadeC c ts -> CascadeW w (Map (AllOf m) (Tail (Inits ts)))
-recordr :: (Functionish c, m ~ Dst c, w ~ Src c) =>
-            CascadeC c ts -> CascadeW w (Map (AllOf m) (Tail (RInits ts)))
--}
-
-{-
-type family AllOfNonEmptyInits (m :: * -> *) (ts :: [*]) :: [*] where
-  AllOfNonEmptyInits m '[]        = '[]
-  AllOfNonEmptyInits m (a ': as)  = AllOf m '[a] ': MapCons a (AllOfNonEmptyInits m as)
-
-type family MapCons (a :: *) (ts :: [*]) :: [*] where
-  MapCons a '[] = '[]
-  MapCons a (AllOf m ts ': ms) = AllOf m (a ': ts) ': MapCons a ts
-
-
-record :: (Functionish c, w ~ Src c, m ~ Dst c) =>
-            CascadeC c ts -> CascadeW w (AllOfNonEmptyInits m ts)
-            -- CascadeC c ts -> CascadeW w (Map (AllOf m) (Tail (Inits ts)))
-record Done = Done
--- record (f :>>> fs) = allOf (run f) =>=: record fs
-
-sequenceAllOf :: (Monad m, Comonad w, Applicative m, Traversable w) =>
-                  w (AllOf m ts) -> AllOf m (Map w ts)
-sequenceAllOf wao = case extract wao of
-    None      -> None
-    a :& mas  -> liftW headAO wao :& liftM sequenceAllOf (sequenceA $ liftW tailAO wao)
-  where headAO (a :& _) = a
-        tailAO (_ :& mas) = mas
-
-
--}
-{-
-allOf :: (Init ts' ~ ts, Last (t ': ts) ~ x, Last (t ': ts') ~ y) =>
-        (w x -> m y) -> w (AllOf m (t ': ts)) -> AllOf m (t ': ts')
-allOf f wao
-
-  f ::
-
-a :& mas = (a :&) $ do
-  as <- mas
-  case as of
-    (_ :& _) -> allOf f as
-    None -> undefined
--}
 
 -- examples
 fc, gc :: Cascade '[String, Int, Double, Double]
@@ -247,39 +162,3 @@ vc =  toEnum . snd              =>=:
 zigzag :: CascadeC c ts -> CascadeC c ts -> CascadeC c ts
 zigzag Done Done = Done
 zigzag (f :>>> fc) (_ :>>> gc) = f :>>> zigzag gc fc
-
--- type level list functions --
-
-type family Head (as :: [a]) :: a where
-  Head (a ': as) = a
-type family Tail (as :: [a]) :: [a] where
-  Tail (a ': as) = as
-type family Tails (as :: [a]) :: [[a]] where
-  Tails '[] = '[ '[] ]
-  Tails (a ': as) = (a ': as) ': Tails as
-
-type family Last (ts :: [a]) :: a where
-  Last '[a] = a
-  Last (a ': as) = Last as
-type family Init (as :: [a]) :: [a] where
-  Init '[a] = '[]
-  Init (a ': as)  = a ': Init as
-
-type family RInits (as :: [a]) :: [[a]] where
-  RInits '[] = '[ '[] ]
-  -- RInits (a ': as) = '[] ': Map (Snoc a) (RInits as)
-
-type family Inits (as :: [a]) :: [[a]] where
-  Inits '[] = '[ '[] ]
-  -- Inits (a ': as) = '[] ': Map (Cons a) (Inits as)
-
-type family Snoc (t :: a) (ts :: [a]) :: [a] where
-  Snoc a '[] = '[a]
-  Snoc a (b ': cs) = b ': Snoc a cs
-
-type family Cons (t :: a) (ts :: [a]) :: [a] where
-  Cons a as = a ': as
-
-type family Map (f :: a -> b) (as :: [a]) where
-  Map f '[] = '[]
-  Map f (a ': as) = f a ': Map f as
