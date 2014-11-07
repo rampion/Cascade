@@ -115,7 +115,7 @@ type family OneOfNonEmptyTails (w :: * -> *) (ts :: [*]) :: [*] where
   OneOfNonEmptyTails w '[] = '[]
   OneOfNonEmptyTails w (a ': as) = OneOf w (a ': as) ': OneOfNonEmptyTails w as
 
-resume :: (Functionish c, w ~ Src c, m ~ Dst c, Comonad w, Monad m, Traversable w, Applicative m) => 
+resume :: (Functionish c, w ~ Src c, m ~ Dst c, Comonad w, Monad m, Traversable w, Applicative m) =>
           CascadeC c ts -> CascadeM m (OneOfNonEmptyTails w ts)
 resume Done = Done
 resume (f :>>> fs) = oneOf (run f) >=>: resume fs
@@ -164,15 +164,15 @@ type family AllOfRConcats (xs :: [a]) (ys :: [a]) :: [*] where
   AllOfRConcats '[] ys = '[ AllOf' ys]
   AllOfRConcats (a ': as) ys = AllOf' ys ': AllOfRConcats as (a ': ys)
 
-{- 
+{-
 recordr' Done = Done
 recordr' (f :>>> fs) = pushes f :>>> recordr' fs
 -- complex cases
-resume :: (Functionish c, m ~ Dst c, w ~ Src c) => 
+resume :: (Functionish c, m ~ Dst c, w ~ Src c) =>
             CascadeC c ts -> CascadeM m (Map (OneOf w) (Init (Tails ts)))
-record :: (Functionish c, m ~ Dst c, w ~ Src c) => 
+record :: (Functionish c, m ~ Dst c, w ~ Src c) =>
             CascadeC c ts -> CascadeW w (Map (AllOf m) (Tail (Inits ts)))
-recordr :: (Functionish c, m ~ Dst c, w ~ Src c) => 
+recordr :: (Functionish c, m ~ Dst c, w ~ Src c) =>
             CascadeC c ts -> CascadeW w (Map (AllOf m) (Tail (RInits ts)))
 -}
 
@@ -192,7 +192,7 @@ record :: (Functionish c, w ~ Src c, m ~ Dst c) =>
 record Done = Done
 -- record (f :>>> fs) = allOf (run f) =>=: record fs
 
-sequenceAllOf :: (Monad m, Comonad w, Applicative m, Traversable w) => 
+sequenceAllOf :: (Monad m, Comonad w, Applicative m, Traversable w) =>
                   w (AllOf m ts) -> AllOf m (Map w ts)
 sequenceAllOf wao = case extract wao of
     None      -> None
@@ -203,11 +203,11 @@ sequenceAllOf wao = case extract wao of
 
 -}
 {-
-allOf :: (Init ts' ~ ts, Last (t ': ts) ~ x, Last (t ': ts') ~ y) => 
+allOf :: (Init ts' ~ ts, Last (t ': ts) ~ x, Last (t ': ts') ~ y) =>
         (w x -> m y) -> w (AllOf m (t ': ts)) -> AllOf m (t ': ts')
 allOf f wao
 
-  f :: 
+  f ::
 
 a :& mas = (a :&) $ do
   as <- mas
