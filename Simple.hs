@@ -8,6 +8,17 @@
 {-# LANGUAGE UndecidableInstances #-}
 module Simple where
 
+ex_p :: Product '[String, Int, Double, Double]
+ex_p = "Hello" :* 5 :* 5.0 :* 0.2 :* None
+
+ex_s :: Sum '[String, Int, Double, Double]
+ex_s = There $ Here 5
+
+ex_c :: Cascade '[String, Int, Double, Double]
+ex_c =  length        :>>>
+        fromIntegral  :>>>
+        (1/)          :>>> Done
+
 -- generalized product
 --  Product '[]      =~ ()
 --  Product '[a]     =~ (a, ())
@@ -118,8 +129,3 @@ type family RInitProducts (ts :: [*]) (ts' :: [*]) :: [*] where
 records :: Cascade (t ': ts) -> Cascade (RInitProducts (t ': ts) ts')
 records Done = Done
 records (f :>>> fs) = pushes f :>>> records fs
-
-fc :: Cascade '[String, Int, Double, Double]
-fc =  length        :>>>
-      fromIntegral  :>>>
-      (1/)          :>>> Done
