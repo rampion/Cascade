@@ -90,36 +90,32 @@ instance (Show a, Show (OneOf Identity as)) => Show (OneOf Identity (a ': as)) w
   showsPrec p (Here (Identity a))     = showParen (p > 10) $ showString "here " . showsPrec 11 a
   showsPrec p (There as)              = showParen (p > 10) $ showString "there." . showsPrec (-1) as
 
-class AsFunction c where
+class Functionish c where
   type Src c :: * -> *
   type Dst c :: * -> *
   run   :: c a b -> Src c a -> Dst c b
-  -- wrap  :: (Src c a -> Dst c b) -> c a b
 
-instance AsFunction (->) where
+instance Functionish (->) where
   type Src (->) = Identity
   type Dst (->) = Identity
   run  c = fmap c
-  -- wrap f = runIdentity . f . Identity
 
-instance AsFunction (Kleisli m) where
+instance Functionish (Kleisli m) where
   type Src (Kleisli m) = Identity
   type Dst (Kleisli m) = m
   run c   = runKleisli c . runIdentity
-  -- wrap f  = Kleisli $ f . Identity
 
-instance AsFunction (Cokleisli w) where
+instance Functionish (Cokleisli w) where
   type Src (Cokleisli w) = w
   type Dst (Cokleisli w) = Identity
   run c   = Identity . runCokleisli c
-  -- wrap f  = Cokleisli $ runIdentity . f
 
 {-
 type family OneOfNonEmptyTails (w :: * -> *) (ts :: [*]) :: [*] where
   OneOfNonEmptyTails w '[] = '[]
   OneOfNonEmptyTails w (a ': as) = OneOf w (a ': as) ': OneOfNonEmptyTails w as
 
-resume :: (AsFunction c, w ~ Src c, m ~ Dst c, Comonad w, Monad m, Traversable w, Applicative m) => 
+resume :: (Functionish c, w ~ Src c, m ~ Dst c, Comonad w, Monad m, Traversable w, Applicative m) => 
           CascadeC c ts -> CascadeM m (OneOfNonEmptyTails w ts)
 resume Done = Done
 resume (f :>>> fs) = oneOf (run f) >=>: resume fs
@@ -172,11 +168,11 @@ type family AllOfRConcats (xs :: [a]) (ys :: [a]) :: [*] where
 recordr' Done = Done
 recordr' (f :>>> fs) = pushes f :>>> recordr' fs
 -- complex cases
-resume :: (AsFunction c, m ~ Dst c, w ~ Src c) => 
+resume :: (Functionish c, m ~ Dst c, w ~ Src c) => 
             CascadeC c ts -> CascadeM m (Map (OneOf w) (Init (Tails ts)))
-record :: (AsFunction c, m ~ Dst c, w ~ Src c) => 
+record :: (Functionish c, m ~ Dst c, w ~ Src c) => 
             CascadeC c ts -> CascadeW w (Map (AllOf m) (Tail (Inits ts)))
-recordr :: (AsFunction c, m ~ Dst c, w ~ Src c) => 
+recordr :: (Functionish c, m ~ Dst c, w ~ Src c) => 
             CascadeC c ts -> CascadeW w (Map (AllOf m) (Tail (RInits ts)))
 -}
 
@@ -190,7 +186,7 @@ type family MapCons (a :: *) (ts :: [*]) :: [*] where
   MapCons a (AllOf m ts ': ms) = AllOf m (a ': ts) ': MapCons a ts
 
 
-record :: (AsFunction c, w ~ Src c, m ~ Dst c) =>
+record :: (Functionish c, w ~ Src c, m ~ Dst c) =>
             CascadeC c ts -> CascadeW w (AllOfNonEmptyInits m ts)
             -- CascadeC c ts -> CascadeW w (Map (AllOf m) (Tail (Inits ts)))
 record Done = Done
