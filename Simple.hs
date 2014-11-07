@@ -129,3 +129,24 @@ type family RInitProducts (ts :: [*]) (ts' :: [*]) :: [*] where
 records :: Cascade (t ': ts) -> Cascade (RInitProducts (t ': ts) ts')
 records Done = Done
 records (f :>>> fs) = pushes f :>>> records fs
+
+type family Snoc (ts :: [*]) (t:: *) :: [*] where
+  Snoc '[] z = '[ z ]
+  Snoc (a ': bs) z = a ': Snoc bs z
+
+type family Concat (ts :: [*]) (ts':: [*]) :: [*] where
+  Concat '[] zs = zs
+  Concat (a ': bs) zs = a ': Concat bs zs
+
+unshifts :: (a -> b) -> Product (Snoc ts a) -> Product (Snoc (Snoc ts a) b)
+unshifts f (a :* None) = a :* f a :* None
+unshifts f (b :* as@(_ :* _)) = b :* unshifts f as
+
+{-
+replays0 :: Cascade '[ w ] -> Cascade '[ Product (Concat vs '[ w ]) ]
+replays0 Done = Done
+
+replays1 :: Cascade '[ w, x ] -> Cascade '[ Product (Concat vs '[ w ]), Product (Concat vs '[ w, x ]) ]
+replays1 (f :>>> fs) = undefined :>>> undefined
+-- replays1 (f :>>> fs) = unshifts f :>>> replays0 fs
+-}
