@@ -143,7 +143,6 @@ record' (Kleisli f :>>> fs) = undefined
 Cascade '[a]      -> Cascade '[ AllOf' '[a] ]
 Cascade '[a,b]    -> Cascade '[ AllOf' '[a], AllOf' '[b,a] ]
 Cascade '[a,b,c]  -> Cascade '[ AllOf' '[a], AllOf' '[b,a], AllOf' '[c,b,a] ]
--}
 type family StartsWith (ts :: [*]) (ts' :: [*])  :: Constraint where
   StartsWith '[] ts' = ()
   StartsWith (t ': ts) (t' ': ts') = (t ~ t', StartsWith ts ts')
@@ -156,8 +155,22 @@ recordr' (f :>>> fs) = go f :>>> recordr' fs
   where go :: (y -> x) -> AllOf' (y ': zs) -> AllOf' (x ': y ': zs)
         go = undefined
 -- recordr' (f :>>> fs) = (\as@(a :& _) -> undefined) :>>> recordr' fs
+-}
+
+recordr' :: forall t ts. Cascade (t ': ts) -> (forall ts'. Cascade (AllOfRConcats ts (t ': ts')))
+recordr' Done = Done
+recordr' (f :>>> fs) = pushes f :>>> recordr' fs
+
+pushes :: (y -> x) -> AllOf' (y ': zs) -> AllOf' (x ': y ': zs)
+pushes f yzs@(y :& _) = f y &: yzs
+
+type family AllOfRConcats (xs :: [a]) (ys :: [a]) :: [*] where
+  AllOfRConcats '[] ys = '[ AllOf' ys]
+  AllOfRConcats (a ': as) ys = AllOf' ys ': AllOfRConcats as (a ': ys)
 
 {- 
+recordr' Done = Done
+recordr' (f :>>> fs) = pushes f :>>> recordr' fs
 -- complex cases
 resume :: (AsFunction c, m ~ Dst c, w ~ Src c) => 
             CascadeC c ts -> CascadeM m (Map (OneOf w) (Init (Tails ts)))
@@ -258,11 +271,11 @@ type family Init (as :: [a]) :: [a] where
 
 type family RInits (as :: [a]) :: [[a]] where
   RInits '[] = '[ '[] ]
-  RInits (a ': as) = '[] ': Map (Snoc a) (RInits as)
+  -- RInits (a ': as) = '[] ': Map (Snoc a) (RInits as)
 
 type family Inits (as :: [a]) :: [[a]] where
   Inits '[] = '[ '[] ]
-  Inits (a ': as) = '[] ': Map (Cons a) (Inits as)
+  -- Inits (a ': as) = '[] ': Map (Cons a) (Inits as)
 
 type family Snoc (t :: a) (ts :: [a]) :: [a] where
   Snoc a '[] = '[a]
