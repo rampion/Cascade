@@ -135,14 +135,46 @@ data RCascade (ts :: [*]) where
   RDone :: RCascade '[t]
 infixr 1 :.
 
-replays0 :: RCascade '[ w ] -> RCascade '[ Product (w ': xs) ]
+data RProduct (ts :: [*]) where
+  RNone :: RProduct '[]
+  (:/) :: (ts' ~ Concat ts '[a], a ~ Last ts', ts ~ Init ts') => RProduct ts -> a -> RProduct ts'
+infixl 5 :/
+
+type family Init (as :: [*]) where
+  Init '[a] = '[]
+  Init (a ': as)  = a ': Init as
+
+type family RConcat (ts :: [*]) (ts' :: [*]) :: [*] where
+  RConcat '[] ts' = ts'
+  RConcat (t ': ts) ts' = RConcat ts (t ': ts')
+
+type family Concat (ts :: [*]) (ts' :: [*]) :: [*] where
+  Concat '[] ts' = ts'
+  Concat (t ': ts) ts' = t ': Concat ts ts'
+
+replays0 :: RCascade '[ w ] -> RCascade '[ RProduct (w ': ts) ]
 replays0 RDone = RDone
 
-replays1 :: RCascade '[ x, w ] -> RCascade '[ Product (x ': w ': vs ), Product (w ': vs) ]
-replays1 (f :. fs) = pushes f :. replays0 fs
+replays1 :: RCascade '[ x, w ] -> RCascade '[ RProduct (x ': w ': vs ), RProduct (w ': vs) ]
+replays1 (f :. fs) = unshifts f :. replays0 fs
 
+unshifts :: (y -> x) -> RProduct (y ': zs) -> RProduct (x ': y ': zs)
+unshifts f (RNone :/ y) = RNone :/ f y :/ y
+unshifts f (ys@(_ :/ _) :/ z) = unshifts f ys :/ z
+
+unshifts1 :: (y -> x) -> RProduct '[y] -> RProduct '[x,y]
+unshifts1 f (RNone :/ y) = RNone :/ f y :/ y
+
+unshifts2 :: (y -> x) -> RProduct '[y,z] -> RProduct '[x,y,z]
+unshifts2 f ( ys@(_ :/ _) :/ z) = unshifts1 f ys :/ z
+
+unshifts3 :: (y -> x) -> RProduct '[y,z,a] -> RProduct '[x,y,z,a]
+unshifts3 f ( ys@(_ :/ _) :/ z) = unshifts2 f ys :/ z
+
+{-
 replays2 :: RCascade '[ y, x, w ] -> RCascade '[ Product (y ': x ': w ': vs ), Product (x ': w ': vs ), Product (w ': vs) ]
 replays2 (f :. fs) = pushes f :. replays1 fs
+-}
 
 replaysR :: RCascade ts -> RCascade (TailMaps Product ts)
 replaysR RDone = RDone
@@ -165,7 +197,3 @@ deverses = deversesOnto Done
 deversesOnto :: Cascade (t ': ts') -> RCascade (t ': ts) -> Cascade (RConcat ts (t ': ts'))
 deversesOnto c RDone = c
 deversesOnto c (f :. fs) = deversesOnto (f :>>> c) fs
-
-type family RConcat (ts :: [*]) (ts' :: [*]) :: [*] where
-  RConcat '[] ts' = ts'
-  RConcat (t ': ts) ts' = RConcat ts (t ': ts')
