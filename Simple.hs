@@ -99,6 +99,8 @@ resumes2 :: Cascade '[ a, b, c ] -> Cascade '[ Sum '[ a, b, c ], Sum '[ b, c ], 
 resumes2 (f :>>> fs) = pops f :>>> resumes1 fs
 -}
 
+-- TODO: properly should be TailSums ts ts' with i
+--  TailSums (a ': as) ts' = Sum (a ': Concat as ts') ': TailSums as ts'
 type family TailSums (ts :: [*]) :: [*] where
   TailSums '[] = '[]
   TailSums (a ': as) = Sum (a ': as) ': TailSums as
@@ -118,7 +120,7 @@ records0 Done = Done
 records1 :: Cascade '[ x, w ] -> Cascade '[ Product (x ': ys),  Product (w ': x ': ys) ]
 records1 (f :>>> fs) = pushes f :>>> records0 fs
 
-records2 :: Cascade '[ y, x, w ] -> Cascade '[ Product (y ': zs),  Product (x ': y ': zs), Product (w ': x ': y ': zs) ]
+records2 :: Cascade '[ y,x,w ] -> Cascade '[ Product (y':zs), Product (x':y':zs), Product (w':x':y':zs) ]
 records2 (f :>>> fs) = pushes f :>>> records1 fs
 -}
 
@@ -138,7 +140,7 @@ type family Concat (ts :: [*]) (ts':: [*]) :: [*] where
   Concat '[] zs = zs
   Concat (a ': bs) zs = a ': Concat bs zs
 
-unshifts :: (a -> b) -> Product (Snoc ts a) -> Product (Snoc (Snoc ts a) b)
+unshifts :: Last ts ~ a => (a -> b) -> Product ts -> Product (Snoc ts b)
 unshifts f (a :* None) = a :* f a :* None
 unshifts f (b :* as@(_ :* _)) = b :* unshifts f as
 
