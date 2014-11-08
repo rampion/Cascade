@@ -88,24 +88,22 @@ pops :: (a -> b) -> Sum (a ': b ': cs) -> Sum (b ': cs)
 pops f (Here a)   = Here $ f a
 pops f (There s)  = s
 
-{-
-resumes0 :: Cascade '[ a ] -> Cascade '[ Sum '[ a ] ]
+resumes0 :: Cascade '[ a ] -> Cascade '[ Sum (a ': ts) ]
 resumes0 Done = Done
 
-resumes1 :: Cascade '[ a, b ] -> Cascade '[ Sum '[ a, b ], Sum '[ b ] ]
+resumes1 :: Cascade '[ a, b ] -> Cascade '[ Sum ( a ': b ': cs), Sum ( b ': cs) ]
 resumes1 (f :>>> fs) = pops f :>>> resumes0 fs
 
-resumes2 :: Cascade '[ a, b, c ] -> Cascade '[ Sum '[ a, b, c ], Sum '[ b, c ], Sum '[ c ] ]
+resumes2 :: Cascade '[ a, b, c ] -> Cascade '[ Sum ( a ': b ': c ': ds), Sum ( b ': c ': ds), Sum (c ': ds ) ]
 resumes2 (f :>>> fs) = pops f :>>> resumes1 fs
--}
 
--- TODO: properly should be TailSums ts ts' with i
---  TailSums (a ': as) ts' = Sum (a ': Concat as ts') ': TailSums as ts'
-type family TailSums (ts :: [*]) :: [*] where
-  TailSums '[] = '[]
-  TailSums (a ': as) = Sum (a ': as) ': TailSums as
+-- TODO: properly should be TailMaps f ts ts' with i
+--  TailMaps f (a ': as) ts' = Sum (a ': Concat as ts') ': TailMaps f as ts'
+type family TailMaps (f :: [*] -> *) (ts :: [*]) :: [*] where
+  TailMaps f '[] = '[]
+  TailMaps f (a ': as) = f (a ': as) ': TailMaps f as
 
-resumes :: Cascade ts -> Cascade (TailSums ts)
+resumes :: Cascade ts -> Cascade (TailMaps Sum ts)
 resumes Done = Done
 resumes (f :>>> fs) = pops f :>>> resumes fs
 
@@ -132,23 +130,42 @@ records :: Cascade (t ': ts) -> Cascade (RInitProducts (t ': ts) ts')
 records Done = Done
 records (f :>>> fs) = pushes f :>>> records fs
 
-type family Snoc (ts :: [*]) (t:: *) :: [*] where
-  Snoc '[] z = '[ z ]
-  Snoc (a ': bs) z = a ': Snoc bs z
+data RCascade (ts :: [*]) where
+  (:.)  :: (x -> y) -> RCascade (x ': zs) -> RCascade (y ': x ': zs)
+  RDone :: RCascade '[t]
+infixr 1 :.
 
-type family Concat (ts :: [*]) (ts':: [*]) :: [*] where
-  Concat '[] zs = zs
-  Concat (a ': bs) zs = a ': Concat bs zs
+replays0 :: RCascade '[ w ] -> RCascade '[ Product (w ': xs) ]
+replays0 RDone = RDone
 
-unshifts :: Last ts ~ a => (a -> b) -> Product ts -> Product (Snoc ts b)
-unshifts f (a :* None) = a :* f a :* None
-unshifts f (b :* as@(_ :* _)) = b :* unshifts f as
+replays1 :: RCascade '[ x, w ] -> RCascade '[ Product (x ': w ': vs ), Product (w ': vs) ]
+replays1 (f :. fs) = pushes f :. replays0 fs
 
-{-
-replays0 :: Cascade '[ w ] -> Cascade '[ Product (Concat vs '[ w ]) ]
-replays0 Done = Done
+replays2 :: RCascade '[ y, x, w ] -> RCascade '[ Product (y ': x ': w ': vs ), Product (x ': w ': vs ), Product (w ': vs) ]
+replays2 (f :. fs) = pushes f :. replays1 fs
 
-replays1 :: Cascade '[ w, x ] -> Cascade '[ Product (Concat vs '[ w ]), Product (Concat vs '[ w, x ]) ]
-replays1 (f :>>> fs) = undefined :>>> undefined
--- replays1 (f :>>> fs) = unshifts f :>>> replays0 fs
--}
+replaysR :: RCascade ts -> RCascade (TailMaps Product ts)
+replaysR RDone = RDone
+replaysR ( f :. fs ) = pushes f :. replaysR fs
+
+replays :: TailMaps Product (RConcat ts1 '[t1]) ~ (t ': ts) =>
+   Cascade (t1 ': ts1) -> Cascade (RConcat ts '[t])
+replays = deverses . replaysR . reverses
+
+reverses :: Cascade (t ': ts) -> RCascade (RConcat ts '[t])
+reverses = reversesOnto RDone
+
+reversesOnto :: RCascade (t ': ts') -> Cascade (t ': ts) -> RCascade (RConcat ts (t ': ts'))
+reversesOnto c Done = c
+reversesOnto c (f :>>> fs) = reversesOnto (f :. c) fs 
+
+deverses :: RCascade (t ': ts) -> Cascade (RConcat ts '[t])
+deverses = deversesOnto Done
+
+deversesOnto :: Cascade (t ': ts') -> RCascade (t ': ts) -> Cascade (RConcat ts (t ': ts'))
+deversesOnto c RDone = c
+deversesOnto c (f :. fs) = deversesOnto (f :>>> c) fs
+
+type family RConcat (ts :: [*]) (ts' :: [*]) :: [*] where
+  RConcat '[] ts' = ts'
+  RConcat (t ': ts) ts' = RConcat ts (t ': ts')
