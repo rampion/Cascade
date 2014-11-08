@@ -35,6 +35,35 @@ cascade :: Category c => CascadeC c (t ': ts) -> c t (Last (t ': ts))
 cascade Done = id
 cascade (f :>>> fs) = f >>> cascade fs
 
+-- ideally, convert this into a transformation between Cascades
+-- replayM :: Monad m => CascadeM m (t ': ts) -> t -> ProductM m (t ': ts)
+-- replayM Done t = t :* return None
+-- replayM (Kleisli f :>>> fs) a = a :* liftM (replayM fs) (f a)
+
+data DebuggerM (m :: * -> *) (ts :: [*]) where
+  Complete :: DebuggerM m '[]
+  Break :: a -> (a -> m (DebuggerM m bs)) -> DebuggerM m (a ': bs)
+
+-- XXX: would also be useful to have a zipper of previous DebuggerM states and actual choices of input
+--  let hist = (Maybe a, DebuggerM m (a ': b ': c ': ds) :* (Maybe b, DebuggerM m (b ': c ': ds)) :* None
+--
+--  (hist, DebuggerM m (c ': ds)) :: DebugHistoryM m '[b,c] (c ': ds)
+--
+
+debugM :: Monad m => CascadeM m (t ': ts) -> t -> DebuggerM m (t ': ts)
+debugM Done t = Break t . const $ return Complete
+debugM (Kleisli f :>>> fs) a = Break a $ liftM (debugM fs) . f
+
+-- useful for stepping through a monadic result, like `debugM mc "hello world"`
+curr :: DebuggerM m (t ': ts) -> t
+curr (Break x _) = x
+
+next :: DebuggerM m (t ': ts) -> t -> m (DebuggerM m ts)
+next (Break _ f) = f
+
+step :: DebuggerM m (t ': ts) -> m (DebuggerM m ts)
+step (Break x f) = f x
+
 -- specialize to functions
 type Cascade   = CascadeC (->)
 
@@ -59,19 +88,19 @@ cascadeW = runCokleisli . cascade
 -- monadic product
 data ProductM (m :: * -> *) (ts :: [*]) where
   None :: ProductM m '[]
-  (:&) :: a -> m (ProductM m ts) -> ProductM m (a ': ts)
+  (:*) :: a -> m (ProductM m ts) -> ProductM m (a ': ts)
 type Product = ProductM Identity
-infixr 5 :&
+infixr 5 :*
 
-(&:) :: a -> Product ts -> Product (a ': ts)
-a &: as = a :& return as
-infixr 5 &:
+(*:) :: a -> Product ts -> Product (a ': ts)
+a *: as = a :* return as
+infixr 5 *:
 
 instance Show (ProductM Identity '[]) where
   showsPrec _ None = showString "None"
 
 instance (Show a, Show (ProductM Identity as)) => Show (ProductM Identity (a ': as)) where
-  showsPrec p (a :& (Identity as)) = showParen (p > 10) $ showsPrec 5 a . showString " &: " . showsPrec 5 as
+  showsPrec p (a :* (Identity as)) = showParen (p > 10) $ showsPrec 5 a . showString " *: " . showsPrec 5 as
 
 -- comonadic sum
 data SumW (w :: * -> *) (ts :: [*]) where
@@ -129,7 +158,7 @@ pops _ _ (There oo) = return oo
 pops swap f (Here wx)  = liftM Here . swap $ wx =>> f
 
 pushes :: (y -> x) -> Product (y ': zs) -> Product (x ': y ': zs)
-pushes f yzs@(y :& _) = f y &: yzs
+pushes f yzs@(y :* _) = f y *: yzs
 
 -- examples
 fc, gc :: Cascade '[String, Int, Double, Double]
