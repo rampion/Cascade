@@ -6,6 +6,7 @@
 {-# LANGUAGE PolyKinds              #-}
 {-# LANGUAGE RankNTypes             #-}
 {-# LANGUAGE FlexibleInstances      #-}
+{-# LANGUAGE FlexibleContexts       #-}
 {-# LANGUAGE UndecidableInstances   #-}
 {-# LANGUAGE ConstraintKinds        #-}
 module Cascade where
@@ -40,29 +41,80 @@ cascade (f :>>> fs) = f >>> cascade fs
 -- replayM Done t = t :* return None
 -- replayM (Kleisli f :>>> fs) a = a :* liftM (replayM fs) (f a)
 
-data DebuggerM (m :: * -> *) (ts :: [*]) where
-  Complete :: DebuggerM m '[]
-  Break :: a -> (a -> m (DebuggerM m bs)) -> DebuggerM m (a ': bs)
+data DebuggerM (m :: * -> *) (past :: [*]) (current :: *) (future :: [*]) where
 
--- XXX: would also be useful to have a zipper of previous DebuggerM states and actual choices of input
---  let hist = (Maybe a, DebuggerM m (a ': b ': c ': ds) :* (Maybe b, DebuggerM m (b ': c ': ds)) :* None
---
---  (hist, DebuggerM m (c ': ds)) :: DebugHistoryM m '[b,c] (c ': ds)
---
+  Begin     :: (a -> m (DebuggerM m '[a] b cs))
+            -> DebuggerM m '[] a (b ': cs)
 
-debugM :: Monad m => CascadeM m (t ': ts) -> t -> DebuggerM m (t ': ts)
-debugM Done t = Break t . const $ return Complete
-debugM (Kleisli f :>>> fs) a = Break a $ liftM (debugM fs) . f
+  Break     :: (a -> m (DebuggerM m (a ': z ': ys) b cs)) 
+            -> DebuggerM m ys z (a ': b ': cs)
+            -> z
+            -> a 
+            -> DebuggerM m (z ': ys) a (b ': cs)
 
--- useful for stepping through a monadic result, like `debugM mc "hello world"`
-curr :: DebuggerM m (t ': ts) -> t
-curr (Break x _) = x
+  End       :: DebuggerM m ys z '[a]
+            -> z
+            -> a
+            -> DebuggerM m (z ': ys) a '[]
 
-next :: DebuggerM m (t ': ts) -> t -> m (DebuggerM m ts)
-next (Break _ f) = f
+instance (All Show zs, All Show bs, Show a) => Show (DebuggerM m zs a bs) where
+  showsPrec p d = case d of
+      Begin _       -> showString "Begin" 
+      Break _ _ z a -> showParen (p > 10) $ showString "Break" . showIO z a
+      End     _ z a -> showParen (p > 10) $ showString "End  " . showIO z a
+    where showIO z a =  showString " { given = ".  showsPrec 11 z . 
+                        showString ", returned = " . showsPrec 11 a . 
+                        showString " }"
 
-step :: DebuggerM m (t ': ts) -> m (DebuggerM m ts)
-step (Break x f) = f x
+type family All (c :: * -> Constraint) (xs :: [*]) :: Constraint where
+  All c '[] = ()
+  All c (a ': as) = (c a, All c as)
+
+printHistory :: (All Show zs, All Show bs, Show a) => DebuggerM m zs a bs-> IO ()
+printHistory d@(Begin _      ) = print d
+printHistory d@(Break _ _ _ _) = print d >> printHistory (back d)
+printHistory d@(End     _ _ _) = print d >> printHistory (back d)
+
+rundmc :: IO (DebuggerM IO '[String, String, (), [Char]] () '[])
+rundmc = debugM >>> use "walk this way" >=> step >=> step >=> step $ mc
+
+given :: DebuggerM m (z ': ys) a bs -> z
+given (Break _ _ z _) = z
+given (End     _ z _) = z
+
+returned :: DebuggerM m (z ': ys) a bs -> a
+returned (Break _ _ _ a) = a
+returned (End     _ _ a) = a
+
+back :: DebuggerM m (z ': ys) a bs -> DebuggerM m ys z (a ': bs)
+back (Break _ d _ _) = d
+back (End     d _ _) = d
+
+redo :: DebuggerM m (a ': z ': ys) b cs -> m (DebuggerM m (a ': z ': ys) b cs)
+redo = step . back
+
+redoWith :: a -> DebuggerM m (a ': zs) b cs -> m (DebuggerM m (a ': zs) b cs)
+redoWith x = use x . back
+
+use :: a -> DebuggerM m zs a (b ': cs) -> m (DebuggerM m (a ': zs) b cs)
+use a (Begin f      ) = f a
+use a (Break f _ _ _) = f a
+
+step :: DebuggerM m (z ': ys) a (b ': cs) -> m (DebuggerM m (a ': z ': ys) b cs)
+step (Break f _ _ a) = f a
+
+debugM :: Monad m => CascadeM m (a ': b ': cs) -> DebuggerM m '[] a (b ': cs)
+debugM (f :>>> fs) = fix $ \d ->  Begin (go f fs d)
+  where go :: Monad m
+           => Kleisli m a b
+           -> CascadeM m (b ': cs)
+           -> DebuggerM m zs a (b ': cs)
+           -> (a -> m (DebuggerM m (a ': zs) b cs))
+        go (Kleisli f) Done         d a = End d a `liftM` f a
+        go (Kleisli f) (f' :>>> fs) d a = do
+          b <- f a
+          let d' = Break (go f' fs d') d a b
+          return d'
 
 -- specialize to functions
 type Cascade   = CascadeC (->)
