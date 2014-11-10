@@ -3,20 +3,16 @@
 {-# LANGUAGE GADTs                  #-}
 {-# LANGUAGE TypeFamilies           #-}
 {-# LANGUAGE TypeOperators          #-}
-{-# LANGUAGE UndecidableInstances   #-}
+{-# LANGUAGE UndecidableInstances   #-} -- to use All Show zs
 module Cascade.Debugger where
+import Cascade
+import Cascade.Util.ListKind
 
 import Control.Arrow
 import Control.Category
 import Prelude hiding (id, (.))
 import GHC.Prim         (Constraint)
 
-import Cascade
-
--- ideally, convert this into a transformation between Cascades
--- replayM :: Monad m => CascadeM m (t ': ts) -> t -> ProductM m (t ': ts)
--- replayM Done t = t :* return None
--- replayM (Kleisli f :>>> fs) a = a :* liftM (replayM fs) (f a)
 
 data DebuggerM (m :: * -> *) (past :: [*]) (current :: *) (future :: [*]) where
 
