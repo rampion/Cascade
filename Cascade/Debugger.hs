@@ -43,10 +43,6 @@ instance (All Show zs, All Show bs, Show a) => Show (DebuggerM m zs a bs) where
                         showString ", returned = " . showsPrec 11 a . 
                         showString " }"
 
-type family All (c :: * -> Constraint) (xs :: [*]) :: Constraint where
-  All c '[] = ()
-  All c (a ': as) = (c a, All c as)
-
 printHistory :: (All Show zs, All Show bs, Show a) => DebuggerM m zs a bs-> IO ()
 printHistory d@(Begin _      ) = print d
 printHistory d@(Break _ _ _ _) = print d >> printHistory (back d)
