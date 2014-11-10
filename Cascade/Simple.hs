@@ -8,6 +8,9 @@
 {-# LANGUAGE UndecidableInstances #-}
 module Simple where
 
+-- This is mainly me playing around with "simple" cascades (just functions, not
+-- general categories)
+
 ex_p :: Product '[String, Int, Double, Double]
 ex_p = "Hello" :* 5 :* 5.0 :* 0.2 :* None
 
