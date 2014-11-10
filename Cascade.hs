@@ -15,9 +15,7 @@ import Control.Arrow
 import Control.Category
 import Control.Comonad
 import Control.Monad.Identity
-import Data.Char (toUpper)
 import Prelude hiding (id, (.))
-import System.Environment (getEnv, setEnv, getProgName)
 import Data.Traversable
 import Control.Applicative
 
@@ -35,86 +33,6 @@ type family Last (ts :: [a]) :: a where
 cascade :: Category c => CascadeC c (t ': ts) -> c t (Last (t ': ts))
 cascade Done = id
 cascade (f :>>> fs) = f >>> cascade fs
-
--- ideally, convert this into a transformation between Cascades
--- replayM :: Monad m => CascadeM m (t ': ts) -> t -> ProductM m (t ': ts)
--- replayM Done t = t :* return None
--- replayM (Kleisli f :>>> fs) a = a :* liftM (replayM fs) (f a)
-
-data DebuggerM (m :: * -> *) (past :: [*]) (current :: *) (future :: [*]) where
-
-  Begin     :: (a -> m (DebuggerM m '[a] b cs))
-            -> DebuggerM m '[] a (b ': cs)
-
-  Break     :: (a -> m (DebuggerM m (a ': z ': ys) b cs)) 
-            -> DebuggerM m ys z (a ': b ': cs)
-            -> z
-            -> a 
-            -> DebuggerM m (z ': ys) a (b ': cs)
-
-  End       :: DebuggerM m ys z '[a]
-            -> z
-            -> a
-            -> DebuggerM m (z ': ys) a '[]
-
-instance (All Show zs, All Show bs, Show a) => Show (DebuggerM m zs a bs) where
-  showsPrec p d = case d of
-      Begin _       -> showString "Begin" 
-      Break _ _ z a -> showParen (p > 10) $ showString "Break" . showIO z a
-      End     _ z a -> showParen (p > 10) $ showString "End  " . showIO z a
-    where showIO z a =  showString " { given = ".  showsPrec 11 z . 
-                        showString ", returned = " . showsPrec 11 a . 
-                        showString " }"
-
-type family All (c :: * -> Constraint) (xs :: [*]) :: Constraint where
-  All c '[] = ()
-  All c (a ': as) = (c a, All c as)
-
-printHistory :: (All Show zs, All Show bs, Show a) => DebuggerM m zs a bs-> IO ()
-printHistory d@(Begin _      ) = print d
-printHistory d@(Break _ _ _ _) = print d >> printHistory (back d)
-printHistory d@(End     _ _ _) = print d >> printHistory (back d)
-
-rundmc :: IO (DebuggerM IO '[String, String, (), [Char]] () '[])
-rundmc = debugM >>> use "walk this way" >=> step >=> step >=> step $ mc
-
-given :: DebuggerM m (z ': ys) a bs -> z
-given (Break _ _ z _) = z
-given (End     _ z _) = z
-
-returned :: DebuggerM m (z ': ys) a bs -> a
-returned (Break _ _ _ a) = a
-returned (End     _ _ a) = a
-
-back :: DebuggerM m (z ': ys) a bs -> DebuggerM m ys z (a ': bs)
-back (Break _ d _ _) = d
-back (End     d _ _) = d
-
-redo :: DebuggerM m (a ': z ': ys) b cs -> m (DebuggerM m (a ': z ': ys) b cs)
-redo = step . back
-
-redoWith :: a -> DebuggerM m (a ': zs) b cs -> m (DebuggerM m (a ': zs) b cs)
-redoWith x = use x . back
-
-use :: a -> DebuggerM m zs a (b ': cs) -> m (DebuggerM m (a ': zs) b cs)
-use a (Begin f      ) = f a
-use a (Break f _ _ _) = f a
-
-step :: DebuggerM m (z ': ys) a (b ': cs) -> m (DebuggerM m (a ': z ': ys) b cs)
-step (Break f _ _ a) = f a
-
-debugM :: Monad m => CascadeM m (a ': b ': cs) -> DebuggerM m '[] a (b ': cs)
-debugM (f :>>> fs) = fix $ \d ->  Begin (go f fs d)
-  where go :: Monad m
-           => Kleisli m a b
-           -> CascadeM m (b ': cs)
-           -> DebuggerM m zs a (b ': cs)
-           -> (a -> m (DebuggerM m (a ': zs) b cs))
-        go (Kleisli f) Done         d a = End d a `liftM` f a
-        go (Kleisli f) (f' :>>> fs) d a = do
-          b <- f a
-          let d' = Break (go f' fs d') d a b
-          return d'
 
 -- specialize to functions
 type Cascade   = CascadeC (->)
@@ -211,33 +129,6 @@ pops swap f (Here wx)  = liftM Here . swap $ wx =>> f
 
 pushes :: (y -> x) -> Product (y ': zs) -> Product (x ': y ': zs)
 pushes f yzs@(y :* _) = f y *: yzs
-
--- examples
-fc, gc :: Cascade '[String, Int, Double, Double]
-fc =  read          :>>>
-      fromIntegral  :>>>
-      (1/)          :>>> Done
-gc =  length        :>>>
-      (2^)          :>>>
-      negate        :>>> Done
-
-mc, nc :: CascadeM IO '[ String, (), String, String, () ]
-mc =  putStrLn                >=>:
-      const getLine           >=>:
-      return . map toUpper    >=>:
-      putStrLn                >=>: Done
-nc =  print . length          >=>:
-      const getProgName       >=>:
-      getEnv                  >=>:
-      setEnv "foo"            >=>: Done
-
-wc, vc :: CascadeW ((,) Char) '[ Int, Char, Int, String ]
-wc =  fst                       =>=:
-      fromEnum . snd            =>=:
-      uncurry (flip replicate)  =>=: Done
-vc =  toEnum . snd              =>=:
-      const 5                   =>=:
-      show                      =>=: Done
 
 -- alternate using functions from one cascade then the other
 zigzag :: CascadeC c ts -> CascadeC c ts -> CascadeC c ts

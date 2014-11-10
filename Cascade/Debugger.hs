@@ -10,7 +10,6 @@ import Control.Arrow
 import Control.Category
 import Prelude hiding (id, (.))
 import GHC.Prim         (Constraint)
-import Control.Monad
 
 import Cascade
 
@@ -53,9 +52,6 @@ printHistory d@(Begin _      ) = print d
 printHistory d@(Break _ _ _ _) = print d >> printHistory (back d)
 printHistory d@(End     _ _ _) = print d >> printHistory (back d)
 
-rundmc :: IO (DebuggerM IO '[String, String, (), [Char]] () '[])
-rundmc = debugM >>> use "walk this way" >=> step >=> step >=> step $ mc
-
 given :: DebuggerM m (z ': ys) a bs -> z
 given (Break _ _ z _) = z
 given (End     _ z _) = z
@@ -88,7 +84,9 @@ debugM (f :>>> fs) = let d = Begin (go f fs d) in d
            -> CascadeM m (b ': cs)
            -> DebuggerM m zs a (b ': cs)
            -> (a -> m (DebuggerM m (a ': zs) b cs))
-        go (Kleisli f) Done         d a = End d a `liftM` f a
+        go (Kleisli f) Done         d a = do
+          b <- f a
+          return $ End d a b
         go (Kleisli f) (f' :>>> fs) d a = do
           b <- f a
           let d' = Break (go f' fs d') d a b
