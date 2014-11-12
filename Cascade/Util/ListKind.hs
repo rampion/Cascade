@@ -50,3 +50,7 @@ type family Snoc (x :: a) (xs :: [a]) :: [a] where
 type family ZipWith (f :: a -> b -> c) (as :: [a]) (bs :: [b]) :: [c] where
   ZipWith f '[] '[] = '[]
   ZipWith f (a ': as) (b ': bs) = f a b ': ZipWith f as bs
+
+type family Concat (as :: [a]) (bs :: [a]) :: [a] where
+  Concat '[] bs = bs
+  Concat (a ': as) bs = a ': Concat as bs

@@ -55,6 +55,9 @@ instance (Show a, Show (SumW Identity as)) => Show (SumW Identity (a ': as)) whe
 --
 --     Could not deduce (Map (SumW w) (Init ((y : zs) : Tails zs)) ~ (SumW w (y : zs) : zs0))
 --
+-- XXX: This type family is actually more restrictive than we need - we should
+-- actually use  `SumW w (a ': Concat as bs)`, as we can pass through any b
+-- values untouched. Haven't gotten that to work yet though.
 type family TailSumsW (w :: * -> *) (ts :: [*]) :: [*] where
   TailSumsW w '[] = '[]
   TailSumsW w (a ': as) = SumW w (a ': as) ': TailSumsW w as
