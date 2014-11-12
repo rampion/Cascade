@@ -6,6 +6,7 @@
 {-# LANGUAGE FlexibleContexts       #-}
 {-# LANGUAGE GADTs                  #-}
 {-# LANGUAGE RankNTypes             #-}
+{-# LANGUAGE StandaloneDeriving     #-}
 module Cascade.Sum where
 import Cascade
 import Cascade.Util.ListKind
@@ -14,6 +15,7 @@ import Control.Arrow (Kleisli(..))
 import Control.Comonad (Cokleisli(..), Comonad(..), liftW, (=>>))
 import Control.Monad (liftM)
 import Control.Monad.Identity (Identity(..))
+import Data.Void
 
 -- Comonadic sum
 --
@@ -27,6 +29,15 @@ import Control.Monad.Identity (Identity(..))
 data SumW (w :: * -> *) (ts :: [*]) where
   Here  :: w a -> SumW w (a ': as)
   There :: SumW w as -> SumW w (a ': as)
+
+
+type family SumW' w (ts :: [*]) where
+  SumW' w ('[]) = Void
+  SumW' w (a ': as) = Either (w a) (SumW' w as)
+
+toEither :: SumW w as -> SumW' w as
+toEither (Here wa)  = Left wa
+toEither (There oo) = Right (toEither oo)
 
 -- specialize for the identity comonad, since that'll be common
 type Sum = SumW Identity
@@ -45,7 +56,7 @@ instance (Show a, Show (SumW Identity as)) => Show (SumW Identity (a ': as)) whe
   showsPrec (-1) (Here (Identity a))  = showString "here $ " . showsPrec 0 a
   showsPrec (-1) (There as)           = showString "there." . showsPrec (-1) as
   showsPrec p (Here (Identity a))     = showParen (p > 10) $ showString "here " . showsPrec 11 a
-  showsPrec p (There as)              = showParen (p > 10) $ showString "there." . showsPrec (-1) as
+  showsPrec p (There as)              = showParen True $ showString "there." . showsPrec (-1) as
 
 -- This could be more simply expressed as
 --
@@ -91,3 +102,7 @@ resumeW = unwrapM . resumeC (\c -> Identity . (=>> runCokleisli c))
 -- specialize to functional cascades
 resume :: Cascade ts -> Cascade (TailSums ts)
 resume  = unwrapM . resumeC (\c -> fmap (Identity . c))
+
+-- unwrap the output for the user
+-- resume' :: Cascade ts -> Cascade (Snoc (TailSums ts (Last ts))
+-- resume' fs = resume fs 

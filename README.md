@@ -1,302 +1,178 @@
-Over on StackOverflow, Ramith Jayatilleka asked "[What would the type of a
-list of cascading functions be?](http://stackoverflow.com/questions/26593237/what-would-the-type-of-a-list-of-cascading-functions-be)"
+<b>`Cascade`</b>s are collections of composable functions (e.g. `a -> b, b -> c, ... , y -> z`) where the intermediate types are stored in a type level list (e.g. `Cascade [a,b,c,...,y,z]`).
 
-<blockquote>In Haskell syntax, we can have a (abstract) type like [a -> b],
-which is a list of functions a to b. A concrete type of this would be [Int ->
-Int], such as map (*) [1..10]. Is it possible to have a list of cascading
-functions in a type like [a -> b, b -> c, c -> d, ...]? The individual elements
-of the list are all different (I think) so I don't think it's possible. But is
-it possible with dependent types? What would its type signature be (preferably
-in pseudo-Haskell syntax)?</blockquote>
+For example, consider these `Cascade`s:
 
-Under scrambledeggs' answer, Christian Conkle commented:
-<blockquote>As I had noted in [my answer to the previous
-question](http://stackoverflow.com/a/26566362/1186208), the follow-up
-question (and observation) is: what does such a collection give you over
-function composition?</blockquote>
+    fc :: Cascade '[String, Int, Double, Double]
+    fc =  read          :>>>
+          fromIntegral  :>>>
+          (1/)          :>>> Done
 
-So let's try to come up with something that lets us do something **beyond** simple composition.
+    gc :: Cascade '[String, Int, Double, Double]
+    gc =  length        :>>>
+          (2^)          :>>>
+          negate        :>>> Done
 
-> {-# LANGUAGE ConstraintKinds        #-}
-> {-# LANGUAGE DataKinds              #-}
-> {-# LANGUAGE FlexibleContexts       #-}
-> {-# LANGUAGE FlexibleInstances      #-}
-> {-# LANGUAGE GADTs                  #-}
-> {-# LANGUAGE KindSignatures         #-}
-> {-# LANGUAGE MultiParamTypeClasses  #-}
-> {-# LANGUAGE PolyKinds              #-}
-> {-# LANGUAGE TypeFamilies           #-}
-> {-# LANGUAGE TypeOperators          #-}
-> module Cascade where
-> import Control.Monad    ((>=>), liftM)
-> import Control.Comonad  ((=>=), liftW, Comonad, extract)
-> import Control.Category ((>>>))
-> import GHC.Prim         (Constraint)
+We can convert a cascade into a function easily enough:
 
-What we need is a type that instead of just recording the initial and final types of 
-the cascade of functions, records the type of each intermediate value as well.
+    λ :m +Cascade.Examples Cascade.Operators
+    λ fc # "5"
+    0.2
+    λ gc # "20"
+    -4.0
 
-We can do this by using a GADT parameterized by a type-level list:
+But that's not very inspiring. The real question, [as Christian Conkle put it](http://stackoverflow.com/questions/26593237/what-would-the-type-of-a-list-of-cascading-functions-be#comment41802812_26593534), is "what does such a collection give you over function composition?"
 
-> data Cascade (cs :: [*]) where
->   Done :: Cascade '[a]
->   (:>>>) :: (a -> b) -> Cascade (b ': cs) -> Cascade (a ': b ': cs)
-> infixr 5 :>>>
+Because none of the type information has been lost, we can still extract each of the functions that went into the `Cascade` using simple pattern matching. This opens the door to replacing parts of a cascade, or indexing into the cascade with type-level naturals.
 
-Note that we check that the output of the function we cons with a `Cascade`
-matches the input to the `Cascade`.
+It also lets us do something silly like mix and match two different cascades:
 
-To see how these work, we'll need some way to apply them:
+    λ zigzag fc gc # "3" -- read >>> (2^) >>> (1/)
+    0.125
+    λ zigzag gc fc # "123456789" -- length >>> fromIntegral >>> negate
+    -9.0
 
-> -- convert a Cascade to a function
-> compose :: Cascade (a ': as) -> a -> Last (a ': as)
-> compose Done = id
-> compose (f :>>> fc) = f >>> compose fc
->
-> (~$~) = compose
->
-> -- type level version of last :: [a] -> a
-> type family Last (as :: [a]) where
->   Last '[a] = a
->   Last (a ': as) = Last as
+More seriously, we can record the intermediate results of each `Cascade` using a `Product` type as output:
 
-So now we can construct cascades of functions:
+    λ :m +Cascade.Product
+    λ record fc # "5" *: None
+    0.2 *: 5.0 *: 5 *: "5" *: None
+    λ record gc # "5" *: None
+    -2.0 *: 2.0 *: 1 *: "5" *: None
 
-> fc, gc :: Cascade '[ String, Int, Float ]
-> fc = read :>>> fromIntegral :>>> Done
-> gc = length :>>> (2^) :>>> Done
+Or I can resume the computation at some later point rather that the first function in the `Cascade` using a `Sum` type as input:
 
-And apply them:
+    λ :m +Cascade.Sum
+    λ resume fc # (there.there.here) 0.2
+    here 5.0
+    λ resume gc # (there.here) 0
+    here (-1.0)
 
-    λ fc ~$~ "10"
-    10.0
-    λ gc ~$~ "10"
-    4.0
+Or we could do both:
 
-But that's no more than we can do with function composition. What else can we do?
+    λ resume (record fc) # (there.here) (17 *: "foo" *: None)
+    here (5.8823529411764705e-2 *: 17.0 *: 17 *: "foo" *: None)
+    λ record (resume fc) # (there . there $ here 0.25) *: None
+    here 4.0 *: here 0.25 *: (there.here $ 0.25) *: (there.there.here $ 0.25) *: None
 
-How about blending two cascades?
+But what's nice is that this generalizes nicely to categorical composition, so we can do the same with 
+any categroy, including the `Kleisli` and `Cokleisli` categories for `Monad`s and `Comonad`s respectfully:
 
-> -- alternate using functions from one cascade then the other
-> zigzag :: Cascade as -> Cascade as -> Cascade as
-> zigzag Done Done = Done
-> zigzag (f :>>> fc) (_ :>>> gc) = f :>>> zigzag gc fc
+    -- some example monadic cascades
+    mc, nc :: CascadeM IO '[ String, (), String, String, () ]
+    mc =  putStr                  >=>:
+          const getLine           >=>:
+          return . map toUpper    >=>:
+          putStrLn                >=>: Done
+    nc =  setEnv "foo"            >=>: 
+          const (return "foo")    >=>:
+          getEnv                  >=>:
+          print . length          >=>: Done
 
-    λ zigzag fc gc ~$~ "10"
-    1024.0
-    λ zigzag gc fc ~$~ "10"
-    2.0
+    -- some example comonadic cascades
+    wc, vc :: CascadeW ((,) Char) '[ Int, Char, Int, String ]
+    wc =  fst                       =>=:
+          fromEnum . snd            =>=:
+          uncurry (flip replicate)  =>=: Done
+    vc =  toEnum . snd              =>=:
+          const 5                   =>=:
+          show                      =>=: Done
 
-Or replacing one part of a cascade with a different function of the same type?
+Flipping back to ghci:
 
-> data Ripple (cs :: [*]) where
->   Apply :: (a -> b) -> Ripple (a ': b ': cs)
->   Skip :: Ripple cs -> Ripple (a ': cs)
-> 
-> replaceWith :: Ripple cs -> Cascade cs -> Cascade cs
-> replaceWith (Apply f) (_ :>>> fc) = f :>>> fc
-> replaceWith (Skip r) (f :>>> fc) = f :>>> replaceWith r fc
->
-> zr :: Ripple (a ': b ': Float ': cs)
-> zr = Skip . Apply $ const 0.0
+    λ mc #~ "? "
+    ? i like cheese
+    I LIKE CHEESE
+    λ nc #~ "? "
+    2
+    λ wc ~# ('.', 5)
+    ".............................................."
+    λ vc ~# ('x', 9)
+    "('x',5)"
+    λ zigzag mc nc #~ "hi!"
+    hi!3
+    λ zigzag nc mc #~ "hello."
+    USER
+    rampion
+    λ zigzag wc vc ~# ('.', 3)
+    "....."
+    λ zigzag vc wc ~# ('a', 9)
+    "('a',9)"
 
-    λ replaceWith zr fc ~$~ "10"
-    0.0
-    λ replaceWith zr gc ~$~ "10"
-    0.0
+`resume` works on both comonads and monads:
 
-More usefully, we can also use a cascade to see all the intermediate results :
+    λ resumeM nc #~ (there.there.here) "USER"
+    7
+    here ()
+    λ toEither $ resumeW vc # (There . There . Here) ('c',9)
+    Left ('c',"('c',9)")
 
-> -- generalizing (,) to a product of multiple types
-> data AllOf (cs :: [*]) where
->   None :: AllOf '[]
->   (:&) :: a -> AllOf as -> AllOf (a ': as)
-> infixr 5 :&
->
-> instance Show (AllOf '[]) where
->   showsPrec _ None = showString "None"
-> 
-> instance (Show a, Show (AllOf as)) => Show (AllOf (a ': as)) where
->   showsPrec p (a :& as) = showParen (p > 10) $ showsPrec 5 a . showString " :& " . showsPrec 5 as
-> 
-> -- end the cascade at all of its exit points
-> toAllOf :: Cascade (a ': as) -> a -> AllOf (a ': as)
-> toAllOf Done a        = a :& None
-> toAllOf (f :>>> fc) a = a :& (f >>> toAllOf fc) a
->
-> (*$~) = toAllOf
+`record` works on comonads, but I've been having some issues getting it to work the way I want on monads (see `Cascade.Product.hs` for more).
 
-    λ fc *$~ "10"
-    "10" :& 10 :& 10.0 :& None
-    λ gc *$~ "10"
-    "10" :& 2 :& 4.0 :& None
+So, instead of continue to wrestle the type system, for now, I just implemented a debugger that uses `Cascade`s,
+so in addition running a monadic `Cascade` you can debug it.
 
-Or to resume a computation from any point:
+    -- run the debugger for the mc cascade all the way to the end
+    rundmc :: IO (DebuggerM IO '[String, String, (), [Char]] () '[])
+    rundmc = debugM >>> use "walk this way\n> " >=> step >=> step >=> step $ mc
 
-> -- generalizing Either to a union of multiple types
-> data OneOf (cs :: [*]) where
->   Here :: a -> OneOf (a ': as)
->   There :: OneOf as -> OneOf (a ': as)
-> 
-> instance Show (OneOf '[]) where
->   showsPrec _ _ = error "impossible value of type OneOf '[]"
-> 
-> instance (Show a, Show (OneOf as)) => Show (OneOf (a ': as)) where
->   showsPrec p (Here a)    = showParen (p > 10) $ showString "Here " . showsPrec 11 a
->   showsPrec p (There as)  = showParen (p > 10) $ showString "There " . showsPrec 11 as
-> 
-> -- start the cascade at any of its entry points
-> fromOneOf :: Cascade cs -> OneOf cs -> Last cs
-> fromOneOf fc (Here a) = compose fc a
-> fromOneOf (_ :>>> fc) (There o) = fromOneOf fc o
->
-> (~$?) = fromOneOf
+Dropping into ghci:
 
-    λ fc ~$? Here "70"
-    70.0
-    λ gc ~$? There (Here 5)
-    32.0
+    λ d <- rundmc
+    walk this way
+    > talk this way
+    TALK THIS WAY
 
-Or both:
+We can see the current state of the debugger:
 
-> -- start anywhere, and end everywhere after that
-> fromOneOfToAllOf :: Cascade cs -> OneOf cs -> OneOf (Map AllOf (Tails cs))
-> fromOneOfToAllOf fc (Here a) = Here $ toAllOf fc a
-> fromOneOfToAllOf (_ :>>> fc) (There o) = There $ fromOneOfToAllOf fc o
->
-> (*$?) = fromOneOfToAllOf
+    λ d
+    End   { given = "TALK THIS WAY", returned = () }
 
-    λ fc *$? There (Here 70)
-    There (Here (70 :& 70.0 :& None))
-    λ gc *$? Here "six"
-    Here ("six" :& 3 :& 8.0 :& None)
+the full stack trace
 
-> 
-> type family AllOf' (cs ::[*]) where
->   AllOf' '[] = ()
->   AllOf' (a ': as) = (a, AllOf' as)
-> 
-> to :: AllOf cs -> AllOf' cs
-> to None = ()
-> to (a :& as) = (a, to as)
-> 
-> -- and you can do Monads too!
-> data CascadeM (m :: * -> *) (cs :: [*]) where
->   DoneM :: CascadeM m '[a]
->   (:>=>) :: (a -> m b) -> CascadeM m (b ': cs) -> CascadeM m (a ': b ': cs)
-> infixr 5 :>=>
-> 
-> echo :: CascadeM IO '[(), String, ()]
-> echo = const getLine :>=> putStrLn :>=> DoneM
-> 
-> composeM :: Monad m => CascadeM m (a ': as) -> a -> m (Last (a ': as))
-> composeM DoneM = return
-> composeM (f :>=> fc) = f >=> composeM fc
-> 
-> fromOneOfM :: Monad m => CascadeM m cs -> OneOf cs -> m (Last cs)
-> fromOneOfM fc (Here a) = composeM fc a
-> fromOneOfM (_ :>=> fc) (There o) = fromOneOfM fc o
-> 
-> -- end the cascade at all of its exit points
-> toAllOfM :: Monad m => CascadeM m (a ': as) -> a -> m (AllOf (a ': as))
-> toAllOfM DoneM a       = return $ a :& None
-> toAllOfM (f :>=> fc) a = (a :&) `liftM` (f >=> toAllOfM fc) a
-> 
-> -- start anywhere, and end everywhere after that
-> fromOneOfToAllOfM :: Monad m => CascadeM m cs -> OneOf cs -> m (OneOf (Map AllOf (Tails cs)))
-> fromOneOfToAllOfM fc (Here a) = Here `liftM` toAllOfM fc a
-> fromOneOfToAllOfM (_ :>=> fc) (There o) = There `liftM` fromOneOfToAllOfM fc o
-> 
-> -- and Comonads!
-> data CascadeW (w :: * -> *) (cs :: [*]) where
->   DoneW :: CascadeW w '[a]
->   (:=>=) :: (w a -> b) -> CascadeW w (b ': cs) -> CascadeW w (a ': b ': cs)
-> infixr 5 :=>=
-> 
-> composeW :: Comonad w => CascadeW w (a ': as) -> w a -> Last (a ': as)
-> composeW DoneW = extract
-> composeW (f :=>= fc) = f =>= composeW fc
-> 
-> fromHere :: OneOf (a ': as) -> a
-> fromHere (Here a) = a
-> 
-> fromThere :: OneOf (a ': as) -> OneOf as
-> fromThere (There o) = o
-> 
-> fromOneOfW :: Comonad w => CascadeW w cs -> w (OneOf cs) -> Last cs
-> fromOneOfW fc w = case extract w of
->   Here _  -> composeW fc $ liftW fromHere w
->   There _ -> case fc of _ :=>= gc -> fromOneOfW gc $ liftW fromThere w
-> 
-> -- end the cascade at all of its exit points
-> toAllOfW :: Comonad w => CascadeW w (a ': as) -> w a -> AllOf (a ': as)
-> toAllOfW DoneW w       = extract w :& None
-> toAllOfW (f :=>= fc) w = extract w :& (f =>= toAllOfW fc) w
-> 
-> -- start anywhere, and end everywhere after that
-> fromOneOfToAllOfW :: Comonad w => CascadeW w cs -> w (OneOf cs) -> OneOf (Map AllOf (Tails cs))
-> fromOneOfToAllOfW fc w = case extract w of
->   Here _  -> Here . toAllOfW fc $ liftW fromHere w
->   There _ -> case fc of _ :=>= gc -> There . fromOneOfToAllOfW gc $ liftW fromThere w
-> 
-> -- type level list functions
-> type family Map (f :: a -> b) (as :: [a]) where
->   Map f '[] = '[]
->   Map f (a ': as) = f a ': Map f as
-> 
-> type family Tails (as :: [a]) where
->   Tails '[] = '[ '[] ]
->   Tails (a ': as) = (a ': as) ': Tails as
-> 
-> type family Tail (as :: [a]) where
->   Tail (a ': as) = as
-> 
-> type family Init (as :: [a]) where
->   Init '[a] = '[]
->   Init (a ': as)  = a ': Init as
-> 
-> type family ZipWith (f :: a -> b -> c) (as :: [a]) (bs :: [b]) where
->   ZipWith f '[] '[] = '[]
->   ZipWith f (a ': as) (b ': bs) = f a b ': ZipWith f as bs
-> 
-> type family AllEqual (a :: *) (bs :: [*]) :: Constraint where
->   AllEqual a '[] = ()
->   AllEqual a (b ': bs) = (a ~ b, AllEqual a bs)
-> 
-> {-
-> class Equals a b where
-> instance a ~ b => Equals a b where
-> 
-> toList :: All (Equals a) as => AllOf as -> [a]
-> -}
-> toList :: AllEqual a as => AllOf as -> [a]
-> toList None = []
-> toList (a :& as) = a : toList as
-> 
-> type family All (f :: a -> Constraint) (as :: [a]) :: Constraint where
->   All f '[] = ()
->   All f (a ': as) = (f a, All f as)
-> 
-> {-
-> instance All Show as => Show (AllOf as) where
->   show None = "None"
-> -}
-> 
->   
-> {-
-> type Cascade' as = AllOf (ZipWith (->) (Init as) (Tail as))
-> 
-> to :: Cascade as -> Cascade' as
-> to Done = None
-> to (f :>>> fc) = f :& to fc
-> 
-> fro :: Cascade' as -> Cascade as
-> fro None = Done
-> fro (f :& fc) = f :>>> fro fc
-> 
-> -- compose a cascade into a single function
-> compose' :: Cascade' (a ': as) -> a -> Last (a ': as)
-> compose' None = id
-> --compose' (f :& fc) = f >>> compose' fc
-> -}
-> -- au BufWritePost *.lhs !pandoc % > %:r.html ; ghc -c %
+    λ printHistory d
+    End   { given = "TALK THIS WAY", returned = () }
+    Break { given = "talk this way", returned = "TALK THIS WAY" }
+    Break { given = (), returned = "talk this way" }
+    Break { given = "walk this way\n> ", returned = () }
+    Begin
+
+back up, step forward:
+
+    λ back d
+    Break { given = "talk this way", returned = "TALK THIS WAY" }
+    λ back it
+    Break { given = (), returned = "talk this way" }
+    λ step it
+    Break { given = "talk this way", returned = "TALK THIS WAY" }
+    λ step it
+    TALK THIS WAY
+    End   { given = "TALK THIS WAY", returned = () }
+
+(Note that when we step forward, the monadic computation reruns)
+
+We can also use a different input than the default at the current stage:
+
+    λ back d
+    Break { given = "talk this way", returned = "TALK THIS WAY" }
+    λ d' <- use "(talk this way)" it
+    (talk this way)
+    λ printHistory d'
+    End   { given = "(talk this way)", returned = () }
+    Break { given = "talk this way", returned = "TALK THIS WAY" }
+    Break { given = (), returned = "talk this way" }
+    Break { given = "walk this way\n> ", returned = () }
+    Begin
+
+And since the debuggers are normal immutable haskell values, we can use both `d` and `d'` without errors.
+
+---
+
+`Cascade`s are still very limited. They're linear, and of a set length. They don't let you hook into functions that call themselves recursively, or functions that have computation paths better represented by trees or lattices.
+
+But that doesn't mean those are necessarily impossible to model, either. For example, simple recursion is fairly easily captured with only a slight modification to `Cascade`
+
+    data CascadeR (ts :: [*]) where
+      (:>>>)  :: x -> y -> CascadeR (y ': zs) -> CascadeR (x ': y ': zs)
+      Fix     :: ((x -> y) -> x -> y) -> CascadeR (y ': zs) -> CascadeR (x ': y ': zs)
+      Done    :: CascadeR '[t]
+

@@ -22,14 +22,14 @@ gc =  length        :>>>
 
 -- some example monadic cascades
 mc, nc :: CascadeM IO '[ String, (), String, String, () ]
-mc =  putStrLn                >=>:
+mc =  putStr                  >=>:
       const getLine           >=>:
       return . map toUpper    >=>:
       putStrLn                >=>: Done
-nc =  print . length          >=>:
-      const getProgName       >=>:
+nc =  setEnv "foo"            >=>: 
+      const (return "foo")    >=>:
       getEnv                  >=>:
-      setEnv "foo"            >=>: Done
+      print . length          >=>: Done
 
 -- some example comonadic cascades
 wc, vc :: CascadeW ((,) Char) '[ Int, Char, Int, String ]
@@ -42,7 +42,7 @@ vc =  toEnum . snd              =>=:
 
 -- run the debugger for the mc cascade all the way to the end
 rundmc :: IO (DebuggerM IO '[String, String, (), [Char]] () '[])
-rundmc = debugM >>> use "walk this way" >=> step >=> step >=> step $ mc
+rundmc = debugM >>> use "walk this way\n> " >=> step >=> step >=> step $ mc
 
 -- alternate using functions from one cascade then the other
 zigzag :: CascadeC c ts -> CascadeC c ts -> CascadeC c ts
