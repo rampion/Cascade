@@ -67,7 +67,7 @@ here 4.0 *: here 0.25 *: (there.here $ 0.25) *: (there.there.here $ 0.25) *: Non
 ```
 
 But what's nice is that this generalizes nicely to categorical composition, so we can do the same with 
-any categroy, including the `Kleisli` and `Cokleisli` categories for `Monad`s and `Comonad`s respectfully:
+any category, including the `Kleisli` and `Cokleisli` categories for `Monad`s and `Comonad`s respectfully:
 
 ```haskell
 -- some example monadic cascades
