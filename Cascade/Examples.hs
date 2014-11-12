@@ -1,4 +1,5 @@
 {-# LANGUAGE DataKinds              #-}
+{-# LANGUAGE GADTs                  #-}
 module Cascade.Examples where
 
 import Cascade
