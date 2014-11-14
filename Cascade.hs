@@ -2,6 +2,7 @@
 {-# LANGUAGE TypeOperators          #-}
 {-# LANGUAGE DataKinds              #-}
 {-# LANGUAGE GADTs                  #-}
+{-# LANGUAGE PolyKinds              #-}
 {-# LANGUAGE RankNTypes             #-}
 module Cascade where
 import Cascade.Util.ListKind (Last)
@@ -13,7 +14,7 @@ import Control.Monad.Identity (Identity(..))
 import Prelude hiding (id, (.))
 
 -- reified categorical composition
-data CascadeC (c :: * -> * -> *) (ts :: [*]) where
+data CascadeC (c :: t -> t -> *) (ts :: [t]) where
   (:>>>)  :: c x y -> CascadeC c (y ': zs) -> CascadeC c (x ': y ': zs)
   Done    :: CascadeC c '[t]
 infixr 1 :>>>
